@@ -1,14 +1,8 @@
 import { defineConfig } from 'vitest/config'
-import { resolve } from 'node:path'
 
 export default defineConfig({
-  resolve: {
-    // App tests consume the library by its package name, same as the app does.
-    alias: { '@forgesworn/flock': resolve(__dirname, 'src/index.ts') },
-  },
   test: {
-    include: ['src/**/*.test.ts', 'app/**/*.test.ts', 'server/**/*.test.mjs', 'native/**/*.test.ts', 'compatibility/**/*.test.ts'],
-    passWithNoTests: true,
+    include: ['src/**/*.test.ts', 'compatibility/**/*.test.ts'],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],

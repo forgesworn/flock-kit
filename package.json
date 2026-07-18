@@ -1,8 +1,8 @@
 {
   "name": "@forgesworn/flock",
-  "version": "0.0.0",
-  "description": "Experimental, non-commercial location sharing for adult friends and trusted groups. Built on canary-kit over Nostr.",
-  "homepage": "https://flock.forgesworn.dev/",
+  "version": "0.1.0",
+  "description": "Framework-free location-safety and trusted-circle protocol primitives for ForgeSworn applications.",
+  "homepage": "https://github.com/forgesworn/flock-kit#readme",
   "type": "module",
   "private": true,
   "main": "./dist/index.js",
@@ -94,10 +94,15 @@
     }
   },
   "files": [
-    "dist/"
+    "dist/",
+    "compatibility/v1/*.json",
+    "FLOCK.md"
   ],
   "scripts": {
     "build": "tsc",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run check:extraction && npm run test && npm run typecheck && npm run build && npm run smoke",
+    "check:extraction": "node scripts/check-extraction.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
@@ -105,26 +110,7 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "smoke": "npm run build && node scripts/smoke.mjs",
-    "test:e2e": "playwright test",
-    "test:e2e:ci": "CI=1 playwright test",
-    "test:e2e:headed": "playwright test --headed",
-    "test:e2e:ui": "playwright test --ui",
-    "test:e2e:report": "playwright show-report",
-    "dev": "vite",
-    "build:app": "vite build && npm run bundle:check",
-    "bundle:check": "node scripts/check-bundle-size.mjs",
-    "build:native": "vite build --mode native",
-    "apk": "sh native/build-apk.sh debug",
-    "apk:release": "sh native/build-apk.sh release",
-    "apk:verify": "sh native/build-apk.sh verify",
-    "attest": "node scripts/attest-release.mjs",
-    "build:spike": "vite build -c vite.spike.config.ts",
-    "preview:app": "vite preview",
-    "rooms": "node server/rooms.mjs",
-    "rooms:mock": "FLOCK_ROOM_RUNNER=mock node server/rooms.mjs",
-    "gen:vectors": "FLOCK_GEN_VECTORS=1 vitest run compatibility/v1/",
-    "test:native": "cd native/crypto-tests && ./gradlew --console=plain test",
-    "deploy": "sh deploy/deploy.sh"
+    "gen:vectors": "FLOCK_GEN_VECTORS=1 vitest run compatibility/v1/radar-generate.test.ts"
   },
   "keywords": [
     "flock",
@@ -142,47 +128,25 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/forgesworn/flock.git"
+    "url": "https://github.com/forgesworn/flock-kit.git"
   },
   "bugs": {
-    "url": "https://github.com/forgesworn/flock/issues"
+    "url": "https://github.com/forgesworn/flock-kit/issues"
   },
   "dependencies": {
     "canary-kit": "^2.11.0",
-    "rendezvous-kit": "^1.21.6"
+    "geohash-kit": "^1.5.1"
   },
   "devDependencies": {
-    "@capacitor-community/background-geolocation": "^1.2.26",
-    "@capacitor/android": "^8.4.1",
-    "@capacitor/app": "^8.1.0",
-    "@capacitor/assets": "^3.0.5",
-    "@capacitor/cli": "^8.4.1",
-    "@capacitor/core": "^8.4.1",
-    "@capacitor/geolocation": "^8.2.0",
-    "@capacitor/local-notifications": "^8.2.0",
-    "@capacitor/preferences": "^8.0.1",
     "@eslint/js": "^10.0.1",
-    "@fontsource-variable/fraunces": "^5.2.5",
-    "@fontsource-variable/hanken-grotesk": "^5.2.5",
-    "@playwright/test": "^1.61.1",
-    "@protomaps/basemaps": "^5.7.2",
     "@types/node": "^25.6.0",
     "@vitest/coverage-v8": "^4.1.0",
     "eslint": "^10.0.3",
-    "geohash-kit": "^1.5.1",
     "globals": "^17.7.0",
-    "jsqr": "^1.4.0",
-    "keystore-kit": "file:vendor/keystore-kit-0.1.0.tgz",
-    "maplibre-gl": "^5.20.2",
     "nostr-tools": "^2.23.3",
     "nsec-tree": "^1.5.1",
-    "pmtiles": "^4.4.1",
-    "qrcode-generator": "^2.0.4",
-    "signet-login": "^0.11.1",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.57.1",
-    "vite": "^8.0.0",
-    "vitest": "^4.1.0",
-    "ws": "^8.21.1"
+    "vitest": "^4.1.0"
   }
 }
