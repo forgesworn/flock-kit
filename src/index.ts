@@ -10,6 +10,7 @@ export * from 'canary-kit'
 export * from 'canary-kit/nostr'
 
 // --- flock additions ---
+export * from './coordination.js'
 export * from './geofence.js'
 export * from './noreport.js'
 export * from './policy.js'
