@@ -1,6 +1,6 @@
 {
   "name": "@forgesworn/flock",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Framework-free location-safety and trusted-circle protocol primitives for ForgeSworn applications.",
   "homepage": "https://github.com/forgesworn/flock-kit#readme",
   "type": "module",

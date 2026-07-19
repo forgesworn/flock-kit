@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-19
+
+Replaces free-text buzz reasons with a fixed, provider-defined coordination
+vocabulary. Flock carries a tiny set of protocol actions rather than free-form
+chat: senders choose an `action`, and receivers reject anything that is not a
+known action rather than displaying arbitrary text. This narrows the service's
+user-to-user content surface (see the app's OSA illegal-content assessment).
+
+### Added
+
+- `coordination` module — the complete human-to-human vocabulary as stable
+  actions with fixed labels: `check_in`, `on_my_way` (group) and `come_to_me`,
+  `where_are_you`, `call_me`, `on_my_way` (direct), plus `coordinationLabel`,
+  `coordinationActionFromLabel` (exact, never fuzzy), and
+  `isGroupCoordinationAction` / `isDirectCoordinationAction` guards.
+
+### Changed (breaking)
+
+- `buzz` — `buildBuzzSignal` now takes a provider-defined `action`
+  (`check_in` | `on_my_way` | `ring_lost_phone`) instead of a free-text
+  `reason`; `Buzz` gains a stable `action` field, and `reason` becomes a fixed
+  compatibility label derived from the action (never caller prose).
+- `decryptBuzz` rejects any payload whose action is unknown, or whose
+  compatibility label does not exactly match its action — so arbitrary prose,
+  URLs and whitespace variants are dropped, not rendered. Older payloads that
+  carried only an exact known label still migrate.
+- `DEFAULT_BUZZ_REASONS` is now derived from the group action labels
+  (`Check in`, `On my way`); free-text presets like `Come home` are removed.
+
 ## [0.1.0] - 2026-07-18
 
 Initial release of `@forgesworn/flock` as a standalone, framework-free
