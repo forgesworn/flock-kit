@@ -8,8 +8,20 @@ import {
   cueFor,
   targetMoved,
   courseFromFixes,
+  resolveHeading,
+  smoothHeadingDeg,
+  smoothClosingRate,
+  selectMode,
+  panFor,
+  turnSign,
+  classifyTrend,
+  vectorDirectionPhrase,
+  crossedMilestone,
+  voiceLine,
   type RadarInput,
   type TargetObservation,
+  type HeadingInput,
+  type ModeInput,
 } from './radar'
 
 const origin = { lat: 0, lon: 0 }
@@ -314,5 +326,295 @@ describe('courseFromFixes', () => {
   it('a zero or negative time step gives no course', () => {
     expect(courseFromFixes(fix(0, 0, 10), fix(0.001, 0, 10))).toBeNull()
     expect(courseFromFixes(fix(0, 0, 10), fix(0.001, 0, 5))).toBeNull()
+  })
+})
+
+// ── v2: heading engine ───────────────────────────────────────────────────────
+
+describe('resolveHeading — compass distrust', () => {
+  const h = (over: Partial<HeadingInput>): HeadingInput =>
+    ({ compassDeg: 90, compassUsable: true, courseDeg: 200, speedMps: 0, ...over })
+
+  // SAFETY (Fault 1): in a vehicle the compass is confidently wrong — above the
+  // course-speed threshold it is NEVER consulted, only Doppler course.
+  it('at vehicle speed the course wins and the compass is ignored', () => {
+    const r = resolveHeading(h({ speedMps: 8 }))
+    expect(r.source).toBe('course')
+    expect(r.headingDeg).toBe(200)
+    expect(r.status).toBe('ok')
+  })
+
+  it('at vehicle speed with no course we report no heading, never the compass', () => {
+    const r = resolveHeading(h({ speedMps: 8, courseDeg: null }))
+    expect(r.source).toBeNull()
+    expect(r.headingDeg).toBeNull()
+    expect(r.status).toBe('none')
+  })
+
+  it('near-stationary trusts a platform-usable compass', () => {
+    const r = resolveHeading(h({ speedMps: 0.2 }))
+    expect(r.source).toBe('compass')
+    expect(r.headingDeg).toBe(90)
+  })
+
+  it('near-stationary with an unreliable compass falls back to course', () => {
+    const r = resolveHeading(h({ speedMps: 0.2, compassUsable: false }))
+    expect(r.source).toBe('course')
+    expect(r.headingDeg).toBe(200)
+  })
+
+  it('mid-band keeps the compass when it agrees with recent course', () => {
+    const r = resolveHeading(h({ speedMps: 2, compassDeg: 100, courseDeg: 110 }))
+    expect(r.source).toBe('compass')
+    expect(r.status).toBe('ok')
+  })
+
+  it('mid-band drops a compass that disagrees with course, flagging it unreliable', () => {
+    const r = resolveHeading(h({ speedMps: 2, compassDeg: 100, courseDeg: 200 }))
+    expect(r.source).toBe('course')
+    expect(r.headingDeg).toBe(200)
+    expect(r.status).toBe('compass-unreliable')
+  })
+
+  it('no usable source at all → honest no-heading', () => {
+    const r = resolveHeading(h({ speedMps: 0.2, compassDeg: null, compassUsable: false, courseDeg: null }))
+    expect(r.source).toBeNull()
+    expect(r.status).toBe('none')
+  })
+})
+
+describe('smoothHeadingDeg — circular EMA', () => {
+  it('adopts the first sample outright', () => {
+    expect(smoothHeadingDeg(null, 42, 0.5)).toBe(42)
+  })
+
+  it('blends along the SHORTEST arc across north (never the long way)', () => {
+    // 350 → 10 is a +20° step; halfway is 0, not 180.
+    expect(smoothHeadingDeg(350, 10, 0.5)).toBeCloseTo(0, 6)
+  })
+
+  it('alpha 1 is no smoothing', () => {
+    expect(smoothHeadingDeg(100, 250, 1)).toBeCloseTo(250, 6)
+  })
+})
+
+describe('smoothClosingRate — warmer/colder EMA', () => {
+  it('adopts the first instantaneous rate', () => {
+    // 100 → 90 over 5 s = −2 m/s (closing).
+    expect(smoothClosingRate(null, 100, 90, 5, 0.5)).toBeCloseTo(-2, 6)
+  })
+
+  it('a non-positive dt holds the previous rate', () => {
+    expect(smoothClosingRate(-1, 100, 50, 0, 0.5)).toBe(-1)
+  })
+
+  it('eases toward the new instantaneous rate by alpha', () => {
+    // prev −1, inst (110−100)/5 = +2 → −1 + 0.5*(2 − −1) = 0.5.
+    expect(smoothClosingRate(-1, 100, 110, 5, 0.5)).toBeCloseTo(0.5, 6)
+  })
+})
+
+// ── v2: mode machine ─────────────────────────────────────────────────────────
+
+describe('selectMode — VECTOR / SEEK / HOMING with hysteresis', () => {
+  const m = (over: Partial<ModeInput>): ModeInput =>
+    ({ prevMode: 'seek', distanceMetres: 500, speedMps: 0, fastForSec: 0, slowForSec: 0, uncertaintyMetres: 2.4, ...over })
+
+  it('the on-foot middle band is SEEK', () => {
+    expect(selectMode(m({}))).toBe('seek')
+  })
+
+  it('enters HOMING inside the endgame of a precise target', () => {
+    expect(selectMode(m({ distanceMetres: 20 }))).toBe('homing')
+  })
+
+  it('a coarse target never gets a HOMING endgame', () => {
+    expect(selectMode(m({ distanceMetres: 20, uncertaintyMetres: 80 }))).toBe('seek')
+  })
+
+  it('HOMING holds through the hysteresis band and only exits past it', () => {
+    expect(selectMode(m({ prevMode: 'homing', distanceMetres: 35 }))).toBe('homing')
+    expect(selectMode(m({ prevMode: 'homing', distanceMetres: 45 }))).toBe('seek')
+  })
+
+  it('enters VECTOR beyond the far range, or on sustained speed', () => {
+    expect(selectMode(m({ distanceMetres: 5000 }))).toBe('vector')
+    expect(selectMode(m({ distanceMetres: 800, speedMps: 6, fastForSec: 6 }))).toBe('vector')
+  })
+
+  it('VECTOR needs SUSTAINED speed — a brief burst does not enter', () => {
+    expect(selectMode(m({ distanceMetres: 800, speedMps: 6, fastForSec: 2 }))).toBe('seek')
+  })
+
+  it('VECTOR only exits once slow is sustained AND we are back in range', () => {
+    expect(selectMode(m({ prevMode: 'vector', distanceMetres: 800, slowForSec: 3 }))).toBe('vector')
+    expect(selectMode(m({ prevMode: 'vector', distanceMetres: 3000, slowForSec: 12 }))).toBe('vector')
+    expect(selectMode(m({ prevMode: 'vector', distanceMetres: 800, slowForSec: 12 }))).toBe('seek')
+  })
+
+  it('the precise endgame beats the vehicle band', () => {
+    expect(selectMode(m({ prevMode: 'vector', distanceMetres: 15, slowForSec: 12 }))).toBe('homing')
+  })
+})
+
+// ── v2: cue-grammar helpers ──────────────────────────────────────────────────
+
+describe('panFor / turnSign / classifyTrend', () => {
+  it('pan is clamped relative bearing over 90', () => {
+    expect(panFor(0)).toBe(0)
+    expect(panFor(45)).toBeCloseTo(0.5, 6)
+    expect(panFor(90)).toBe(1)
+    expect(panFor(180)).toBe(1)
+    expect(panFor(-90)).toBe(-1)
+    expect(panFor(null)).toBe(0)
+  })
+
+  it('the sign has an on-beam dead band so left/right never ping-pongs', () => {
+    expect(turnSign(0)).toBeNull()
+    expect(turnSign(RADAR.signDeadbandDegrees)).toBeNull()
+    expect(turnSign(RADAR.signDeadbandDegrees + 1)).toBe('right')
+    expect(turnSign(-(RADAR.signDeadbandDegrees + 1))).toBe('left')
+    expect(turnSign(null)).toBeNull()
+  })
+
+  it('the trend needs a clear closing/receding rate; jitter reads flat', () => {
+    expect(classifyTrend(-0.8)).toBe('closing')
+    expect(classifyTrend(0.8)).toBe('receding')
+    expect(classifyTrend(-0.1)).toBeNull()
+    expect(classifyTrend(null)).toBeNull()
+  })
+})
+
+// ── v2: my-accuracy honesty gate + arrival rework (Fault 4) ───────────────────
+
+describe('radarGuidance — my own fix accuracy (Fault 4)', () => {
+  it('a bad fix of MINE voids the bearing exactly like a coarse target', () => {
+    // ~8.8 m away, but my fix is ±9 m: pointing would be fiction.
+    const g = radarGuidance(input({ target: target({ position: { lat: 0.00008, lon: 0 } }), myAccuracyMetres: 9 }))
+    expect(g.state).toBe('point')
+    expect(g.bearingUsable).toBe(false)
+    expect(g.alignment).toBeNull()
+  })
+
+  it('arrival grows with my fix accuracy — "within GPS reach", not orbiting noise', () => {
+    // ~11 m away with a ±15 m fix → arrival radius max(2, 2.4, 12) = 12.
+    const g = radarGuidance(input({ target: target({ position: { lat: 0.0001, lon: 0 } }), myAccuracyMetres: 15 }))
+    expect(g.state).toBe('arrived')
+  })
+
+  it('a good fix does not restrict a distant bearing', () => {
+    const g = radarGuidance(input({ myAccuracyMetres: 5 }))
+    expect(g.state).toBe('point')
+    expect(g.bearingUsable).toBe(true)
+  })
+
+  it('null accuracy leaves v1 behaviour unchanged', () => {
+    const withNull = radarGuidance(input({ myAccuracyMetres: null }))
+    const without = radarGuidance(input())
+    expect(withNull.state).toBe(without.state)
+    expect(withNull.bearingUsable).toBe(without.bearingUsable)
+  })
+})
+
+// ── v2: cue grammar v2 — pan, sign, trend, modes ──────────────────────────────
+
+describe('cueFor v2 — directional channels', () => {
+  it('SEEK point cues carry pan + sign from the relative bearing', () => {
+    const right = cueFor(radarGuidance(input({ headingDeg: 315 }))) // target NE of a NW heading → to the right
+    expect(right.pan).toBeGreaterThan(0)
+    expect(right.sign).toBe('right')
+    const left = cueFor(radarGuidance(input({ headingDeg: 45 })))
+    expect(left.pan).toBeLessThan(0)
+    expect(left.sign).toBe('left')
+  })
+
+  // SAFETY: a coarse/stale target still gets the bare sparse pulse — NO pan,
+  // NO sign, NO trend. Directional cues only exist when the bearing is usable.
+  it('degraded states never carry directional channels', () => {
+    for (const g of [
+      radarGuidance(input({ target: target({ uncertaintyMetres: 610 }) })), // coarse
+      radarGuidance(input({ target: target({ ageSeconds: 700 }) })),        // stale
+      radarGuidance(input({ target: null })),                               // unavailable
+    ]) {
+      const c = cueFor(g)
+      expect(c.pan).toBe(0)
+      expect(c.sign).toBeNull()
+      expect(c.trend).toBeNull()
+    }
+  })
+
+  it('VECTOR keeps the earcon sparse (voice leads) but still pans', () => {
+    const c = cueFor(radarGuidance(input({ headingDeg: 30 })), { mode: 'vector' })
+    expect(c.pattern).toBe('single')
+    expect(c.periodMs).toBeGreaterThanOrEqual(3000)
+    expect(c.sign).toBe('left') // bearing 0, heading 30 → target to the left
+  })
+
+  it('HOMING cadence + pitch interpolate continuously with range', () => {
+    const far = cueFor(radarGuidance(input({ target: target({ position: { lat: 0.00027, lon: 0 } }) })), { mode: 'homing' }) // ~30 m
+    const near = cueFor(radarGuidance(input({ target: target({ position: { lat: 0.000045, lon: 0 } }) })), { mode: 'homing' }) // ~5 m
+    expect(near.periodMs).toBeLessThan(far.periodMs)   // quickens as it closes
+    expect(near.toneHz).toBeGreaterThan(far.toneHz)    // rises in pitch
+  })
+
+  it('HOMING carries the warmer/colder trend note', () => {
+    const closing = cueFor(radarGuidance(input({ target: target({ position: { lat: 0.00027, lon: 0 } }) })), { mode: 'homing', closingRateMps: -0.8 })
+    expect(closing.trend).toBe('closing')
+  })
+
+  // SAFETY (Fault 4): inside ~3× my fix accuracy the me→target bearing is GPS
+  // fiction — HOMING DROPS the arrow (pan/sign) and guides by warmer/colder.
+  it('HOMING drops the arrow when the bearing is fiction, keeping the trend', () => {
+    const c = cueFor(
+      radarGuidance(input({ target: target({ position: { lat: 0.00008, lon: 0 } }), myAccuracyMetres: 5 })), // ~8.8 m, 3× acc = 15 m
+      { mode: 'homing', closingRateMps: -0.6 },
+    )
+    expect(c.pan).toBe(0)
+    expect(c.sign).toBeNull()
+    expect(c.trend).toBe('closing')
+  })
+
+  it('every v2 cue still keeps a per-burst haptic mirror', () => {
+    for (const c of [
+      cueFor(radarGuidance(input()), { mode: 'seek' }),
+      cueFor(radarGuidance(input({ headingDeg: 30 })), { mode: 'vector' }),
+      cueFor(radarGuidance(input({ target: target({ position: { lat: 0.00027, lon: 0 } }) })), { mode: 'homing' }),
+    ]) {
+      expect(c.vibrateMs.length).toBeGreaterThan(0)
+    }
+  })
+})
+
+// ── v2: voice-line copy ──────────────────────────────────────────────────────
+
+describe('voice-line copy', () => {
+  const fmt = (m: number): string => `${Math.round(m)} m`
+
+  it('direction phrases use plain left/right language', () => {
+    expect(vectorDirectionPhrase(0)).toBe('straight ahead')
+    expect(vectorDirectionPhrase(45)).toBe('ahead on your right')
+    expect(vectorDirectionPhrase(-45)).toBe('ahead on your left')
+    expect(vectorDirectionPhrase(90)).toBe('to your right')
+    expect(vectorDirectionPhrase(175)).toBe('behind you')
+    expect(vectorDirectionPhrase(null)).toBe('ahead')
+  })
+
+  it('a milestone announces the deepest band entered, never one sailed past', () => {
+    expect(crossedMilestone(1200, 900)).toBe(1000)
+    expect(crossedMilestone(1200, 400)).toBe(500) // crossed 1000 and 500 → announce 500
+    expect(crossedMilestone(600, 550)).toBeNull()
+    expect(crossedMilestone(null, 900)).toBeNull()
+  })
+
+  it('a milestone line reads "<distance>, <direction>"', () => {
+    const g = radarGuidance(input({ headingDeg: 30 })) // target to the left
+    expect(voiceLine({ kind: 'milestone', distanceMetres: 800 }, g, fmt)).toBe('800 m, ahead on your left')
+  })
+
+  it('degradations and arrival speak plainly, never a bearing', () => {
+    const g = radarGuidance(input())
+    expect(voiceLine({ kind: 'arrived' }, g, fmt)).toMatch(/GPS reach/i)
+    expect(voiceLine({ kind: 'degraded', state: 'stale' }, g, fmt)).toMatch(/stale/i)
+    expect(voiceLine({ kind: 'compass-unreliable' }, g, fmt)).toMatch(/compass unreliable/i)
   })
 })
