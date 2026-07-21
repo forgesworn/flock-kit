@@ -116,6 +116,27 @@ export const RADAR = {
    *  below it the chip is repeating a stationary artefact, which froze the
    *  pointer at the last walking direction when the phone was set down. */
   courseMinSpeedMps: 1,
+
+  // ── Phase 3: BLE RSSI proximity assist (radar-v2 §"BLE RSSI assist") ───────
+  // RSSI is pseudo-science as a ruler, honest as a band: the mesh's identified
+  // GATT link to the target member yields signal-strength samples; a median
+  // over a short window maps to bands ONLY — no metres are ever derived or
+  // spoken from radio. Bands may floor the HOMING cadence, hold HOMING against
+  // indoor GPS wobble, and speak "Very close — by Bluetooth". They never make
+  // a bearing, and a coarse share never blends (the honesty rule, unchanged).
+  /** Median RSSI (dBm) at/above this reads as immediate — same-room close. */
+  bleImmediateRssi: -60,
+  /** …at/above this as near; anything weaker is far (in radio range, no more). */
+  bleNearRssi: -80,
+  /** Fewer window samples than this claims no band at all (null). */
+  bleMinSamples: 3,
+  /** BLE may only blend while GPS itself already places the target within
+   *  this — radio never contradicts an absent or distant GPS story. */
+  bleAssistMaxMetres: 50,
+  /** Cadence floors: an immediate band paces the geiger AS IF this close (and
+   *  near likewise) — the cadence channel only, never the arrow or a number. */
+  bleImmediateFloorMetres: 3,
+  bleNearFloorMetres: 10,
 } as const
 
 export type RadarOptions = typeof RADAR
@@ -152,6 +173,9 @@ export type Alignment = 'aligned' | 'near' | 'off'
 export type TurnSign = 'left' | 'right' | null
 /** Warmer/colder trend of the range (HOMING) — or null when unknown/flat. */
 export type Trend = 'closing' | 'receding' | null
+/** Radio proximity band to an IDENTIFIED mesh member (Phase 3) — or null when
+ *  the mesh is off, the window is thin, or the target runs no radio (a pin). */
+export type BleProximity = 'immediate' | 'near' | 'far' | null
 /** The three guidance modes (radar-v2). One radar, three faces. */
 export type RadarMode = 'vector' | 'seek' | 'homing'
 
@@ -404,13 +428,84 @@ export interface CueContext {
   mode?: RadarMode
   /** Smoothed d(distance)/dt in m/s (negative = closing), or null if unknown. */
   closingRateMps?: number | null
+  /** Radio proximity to the target member (Phase 3), or null/omitted — a pin,
+   *  a mesh-less target and v2.1 callers all read as null (no blend). */
+  bleProximity?: BleProximity
+}
+
+// ── Phase 3: BLE RSSI proximity assist ───────────────────────────────────────
+
+/** Median of an RSSI sample window (dBm), or null on an empty window. The
+ *  median — not the mean — because BLE fading throws wild outliers. */
+export function medianRssi(samples: readonly number[]): number | null {
+  const clean = samples.filter((s) => typeof s === 'number' && !Number.isNaN(s))
+  if (clean.length === 0) return null
+  const sorted = [...clean].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+}
+
+/**
+ * RSSI sample window → proximity band. Bands only — RSSI-to-metres is
+ * pseudo-science and no number is ever derived from radio. A window thinner
+ * than `bleMinSamples` claims nothing (null): one lucky packet is not
+ * proximity.
+ */
+export function bleProximityFromRssi(
+  samples: readonly number[],
+  opts: RadarOptions = RADAR,
+): BleProximity {
+  const clean = samples.filter((s) => typeof s === 'number' && !Number.isNaN(s))
+  if (clean.length < opts.bleMinSamples) return null
+  const median = medianRssi(clean) as number
+  if (median >= opts.bleImmediateRssi) return 'immediate'
+  if (median >= opts.bleNearRssi) return 'near'
+  return 'far'
+}
+
+/**
+ * May BLE proximity blend into guidance AT ALL? The honesty gates from the
+ * design doc, in one place:
+ *  - a band must exist (mesh on, window thick enough);
+ *  - the target must not be a deliberately coarse share (radio must never
+ *    sharpen a disclosure below its chosen precision);
+ *  - GPS itself must already place the target within `bleAssistMaxMetres` —
+ *    radio corroborates a near story, it never replaces an absent one.
+ */
+export function bleAssistUsable(
+  g: RadarGuidance,
+  bleProximity: BleProximity,
+  opts: RadarOptions = RADAR,
+): boolean {
+  if (bleProximity === null) return false
+  if (g.uncertaintyMetres === null || g.uncertaintyMetres > opts.coarseUncertaintyMetres) return false
+  if (g.distanceMetres === null || g.distanceMetres > opts.bleAssistMaxMetres) return false
+  return true
+}
+
+/** The cadence floor a band buys (metres the geiger paces AS IF), or null for
+ *  far/none — a far band proves radio range, not closeness, and paces nothing. */
+export function bleCadenceFloorMetres(
+  bleProximity: BleProximity,
+  opts: RadarOptions = RADAR,
+): number | null {
+  if (bleProximity === 'immediate') return opts.bleImmediateFloorMetres
+  if (bleProximity === 'near') return opts.bleNearFloorMetres
+  return null
 }
 
 /** HOMING geiger cadence: burst period and pitch interpolate continuously with
  *  range (fast + high when near, slow + low when far). Direction cues survive
- *  only while the arrow is honest; otherwise warmer/colder + cadence carry it. */
+ *  only while the arrow is honest; otherwise warmer/colder + cadence carry it.
+ *  A usable BLE band FLOORS the pacing distance (immediate ⇒ paced as ≤3 m)
+ *  so the endgame quickens indoors where the GPS range is fiction — the
+ *  cadence channel only; arrow, pan and sign never come from radio. */
 function homingCue(g: RadarGuidance, ctx: CueContext, opts: RadarOptions): RadarCue {
-  const d = clamp(g.distanceMetres ?? opts.homingFarMetres, opts.homingNearMetres, opts.homingFarMetres)
+  const bleFloor = bleAssistUsable(g, ctx.bleProximity ?? null, opts)
+    ? bleCadenceFloorMetres(ctx.bleProximity ?? null, opts)
+    : null
+  const dRaw = g.distanceMetres ?? opts.homingFarMetres
+  const d = clamp(bleFloor === null ? dRaw : Math.min(dRaw, bleFloor), opts.homingNearMetres, opts.homingFarMetres)
   const span = opts.homingFarMetres - opts.homingNearMetres
   const f = span > 0 ? (d - opts.homingNearMetres) / span : 0 // 0 at the near anchor … 1 at the far anchor
   const periodMs = Math.round(opts.homingPeriodNearMs + f * (opts.homingPeriodFarMs - opts.homingPeriodNearMs))
@@ -674,6 +769,9 @@ export interface ModeInput {
   slowForSec: number
   /** The target's disclosed uncertainty — HOMING is offered to precise targets only. */
   uncertaintyMetres: number | null
+  /** Radio proximity to the target member (Phase 3), or null/omitted. May HOLD
+   *  an active HOMING against indoor GPS wobble; never enters one. */
+  bleProximity?: BleProximity
 }
 
 /**
@@ -688,9 +786,18 @@ export function selectMode(m: ModeInput, opts: RadarOptions = RADAR): RadarMode 
   const dist = m.distanceMetres ?? Infinity
   const coarseForHoming = (m.uncertaintyMetres ?? 0) > opts.homingMaxUncertaintyMetres
 
-  // HOMING — the precise endgame, with enter/exit hysteresis.
+  // HOMING — the precise endgame, with enter/exit hysteresis. A near/immediate
+  // BLE band HOLDS an active HOMING against indoor GPS wobble (accuracy
+  // collapse walks the GPS range past the exit line while the member's radio
+  // is demonstrably in the room) — hold only, within the blend ceiling, never
+  // for a deliberately coarse share, and never a way IN.
+  const ble = m.bleProximity ?? null
+  const bleHold =
+    (ble === 'immediate' || ble === 'near') &&
+    dist <= opts.bleAssistMaxMetres &&
+    (m.uncertaintyMetres ?? 0) <= opts.coarseUncertaintyMetres
   if (m.prevMode === 'homing') {
-    if (dist <= opts.homingExitMetres && !coarseForHoming) return 'homing'
+    if ((dist <= opts.homingExitMetres && !coarseForHoming) || bleHold) return 'homing'
   } else if (dist < opts.homingEnterMetres && !coarseForHoming) {
     return 'homing'
   }
@@ -802,6 +909,9 @@ export type VoiceEvent =
    *  pulse, so a sparse-cadence target never reads as a frozen screen.
    *  `distanceMetres` pre-rounded like `periodic`. */
   | { kind: 'moved'; distanceMetres: number }
+  /** The BLE band just became immediate during HOMING (Phase 3). The line
+   *  claims radio proximity in radio words — never a distance number. */
+  | { kind: 'ble-close' }
 
 /**
  * Assemble one spoken line. `fmtDistance` renders metres in the user's units
@@ -831,6 +941,8 @@ export function voiceLine(ev: VoiceEvent, g: RadarGuidance, fmtDistance: (metres
       return ev.mode === 'vector' ? 'Vehicle mode' : ev.mode === 'homing' ? 'Closing in' : 'On-foot tracking'
     case 'compass-unreliable':
       return 'Compass unreliable — using your direction of travel'
+    case 'ble-close':
+      return 'Very close — by Bluetooth'
     case 'arrived':
       return 'Within GPS reach — look around'
     case 'degraded':

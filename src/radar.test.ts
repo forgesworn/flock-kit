@@ -21,6 +21,10 @@ import {
   speakableDistanceMetres,
   crossedMilestone,
   voiceLine,
+  medianRssi,
+  bleProximityFromRssi,
+  bleAssistUsable,
+  bleCadenceFloorMetres,
   type RadarInput,
   type TargetObservation,
   type HeadingInput,
@@ -694,5 +698,153 @@ describe('periodic voice line', () => {
     expect(voiceLine({ kind: 'moved', distanceMetres: 300 }, g, fmt)).toBe("They've moved — 300 m, at your 11 o'clock")
     const noHeading = radarGuidance(input({ headingDeg: null }))
     expect(voiceLine({ kind: 'moved', distanceMetres: 300 }, noHeading, fmt)).toBe("They've moved — 300 m")
+  })
+})
+
+// ── Phase 3: BLE RSSI proximity assist ───────────────────────────────────────
+
+describe('medianRssi / bleProximityFromRssi', () => {
+  it('median of an empty window is null', () => {
+    expect(medianRssi([])).toBe(null)
+  })
+
+  it('takes the middle of an odd window and the mean-of-middle-two of an even one', () => {
+    expect(medianRssi([-70, -50, -90])).toBe(-70)
+    expect(medianRssi([-60, -80])).toBe(-70)
+  })
+
+  it('a thin window claims no band at all', () => {
+    expect(bleProximityFromRssi([-50])).toBe(null)
+    expect(bleProximityFromRssi([-50, -52])).toBe(null)
+  })
+
+  it('bands by median: immediate / near / far', () => {
+    expect(bleProximityFromRssi([-55, -58, -52])).toBe('immediate')
+    expect(bleProximityFromRssi([-70, -75, -65])).toBe('near')
+    expect(bleProximityFromRssi([-90, -85, -95])).toBe('far')
+  })
+
+  it('one wild fade outlier cannot flip the band — median, not mean', () => {
+    expect(bleProximityFromRssi([-55, -56, -110])).toBe('immediate')
+  })
+})
+
+describe('bleAssistUsable — the blend honesty gates', () => {
+  // ~30 m north, precise, fresh — squarely inside the blend ceiling.
+  const nearInput = (): RadarInput => input({ target: target({ position: { lat: 0.00027, lon: 0 } }) })
+
+  it('no band, no blend', () => {
+    expect(bleAssistUsable(radarGuidance(nearInput()), null)).toBe(false)
+  })
+
+  it('blends for a precise target GPS already places near', () => {
+    expect(bleAssistUsable(radarGuidance(nearInput()), 'immediate')).toBe(true)
+    expect(bleAssistUsable(radarGuidance(nearInput()), 'far')).toBe(true)
+  })
+
+  it('a deliberately coarse share NEVER blends — radio must not sharpen a chosen precision', () => {
+    const g = radarGuidance(input({ target: target({ position: { lat: 0.00027, lon: 0 }, uncertaintyMetres: 80 }) }))
+    expect(bleAssistUsable(g, 'immediate')).toBe(false)
+  })
+
+  it('GPS placing the target beyond the ceiling wins over any radio story', () => {
+    const g = radarGuidance(input()) // ~1.1 km away
+    expect(bleAssistUsable(g, 'immediate')).toBe(false)
+  })
+
+  it('no distance, no blend — radio corroborates, it never replaces', () => {
+    const g = radarGuidance(input({ me: null }))
+    expect(bleAssistUsable(g, 'immediate')).toBe(false)
+  })
+
+  it('cadence floors: immediate paces as 3 m, near as 10 m, far paces nothing', () => {
+    expect(bleCadenceFloorMetres('immediate')).toBe(RADAR.bleImmediateFloorMetres)
+    expect(bleCadenceFloorMetres('near')).toBe(RADAR.bleNearFloorMetres)
+    expect(bleCadenceFloorMetres('far')).toBe(null)
+    expect(bleCadenceFloorMetres(null)).toBe(null)
+  })
+})
+
+describe('HOMING cue — BLE cadence blend', () => {
+  // ~30 m north of me, precise and fresh: the far anchor of the geiger.
+  const homingInput = (): RadarInput => input({ target: target({ position: { lat: 0.00027, lon: 0 } }) })
+  const cue = (bleProximity: Parameters<typeof bleAssistUsable>[1] | undefined) =>
+    cueFor(radarGuidance(homingInput()), { mode: 'homing', bleProximity })
+
+  it('an immediate band paces the geiger like touching distance', () => {
+    const three = cueFor(radarGuidance(input({ target: target({ position: { lat: 0.000027, lon: 0 } }) })), { mode: 'homing' }) // ~3 m target
+    const blended = cue('immediate')
+    expect(blended.periodMs).toBe(three.periodMs)
+    expect(blended.toneHz).toBe(three.toneHz)
+  })
+
+  it('near quickens the cadence; far and no-band leave it alone', () => {
+    const none = cue(undefined)
+    expect(cue('near').periodMs).toBeLessThan(none.periodMs)
+    expect(cue('near').periodMs).toBeGreaterThan(cue('immediate').periodMs)
+    expect(cue('far').periodMs).toBe(none.periodMs)
+    expect(cue(null).periodMs).toBe(none.periodMs)
+  })
+
+  it('direction never comes from radio — pan and sign are what GPS honesty allows', () => {
+    // My own fix accuracy poisons the bearing (Fault 4): the arrow is dropped
+    // and an immediate band must not resurrect any directional channel.
+    const g = radarGuidance({ ...homingInput(), myAccuracyMetres: 15 })
+    const blended = cueFor(g, { mode: 'homing', bleProximity: 'immediate' })
+    expect(blended.pan).toBe(0)
+    expect(blended.sign).toBe(null)
+    // …but the cadence still quickens: radio owns pacing, GPS owns pointing.
+    const unblended = cueFor(g, { mode: 'homing' })
+    expect(blended.periodMs).toBeLessThan(unblended.periodMs)
+  })
+
+  it('a coarse share with a hot radio stays exactly a coarse share', () => {
+    const g = radarGuidance(input({ target: target({ position: { lat: 0.00027, lon: 0 }, uncertaintyMetres: 80 }) }))
+    expect(cueFor(g, { mode: 'homing', bleProximity: 'immediate' })).toEqual(cueFor(g, { mode: 'homing' }))
+  })
+
+  it('outside HOMING the band changes nothing — blend is an endgame-only channel', () => {
+    const g = radarGuidance(input({ headingDeg: 30 }))
+    expect(cueFor(g, { mode: 'seek', bleProximity: 'immediate' })).toEqual(cueFor(g, { mode: 'seek' }))
+    expect(cueFor(g, { mode: 'vector', bleProximity: 'immediate' })).toEqual(cueFor(g, { mode: 'vector' }))
+  })
+})
+
+describe('selectMode — BLE hold', () => {
+  const m = (over: Partial<ModeInput>): ModeInput =>
+    ({ prevMode: 'seek', distanceMetres: 500, speedMps: 0, fastForSec: 0, slowForSec: 0, uncertaintyMetres: 2.4, ...over })
+
+  it('a near/immediate band HOLDS an active HOMING past the GPS exit line', () => {
+    expect(selectMode(m({ prevMode: 'homing', distanceMetres: 45, bleProximity: 'near' }))).toBe('homing')
+    expect(selectMode(m({ prevMode: 'homing', distanceMetres: 45, bleProximity: 'immediate' }))).toBe('homing')
+    expect(selectMode(m({ prevMode: 'homing', distanceMetres: 45 }))).toBe('seek')
+    expect(selectMode(m({ prevMode: 'homing', distanceMetres: 45, bleProximity: 'far' }))).toBe('seek')
+  })
+
+  it('holds through an indoor GPS-uncertainty collapse of a precise share', () => {
+    // Target's disclosed uncertainty ballooned past the HOMING gate (10 m) but
+    // is nowhere near a deliberate coarse share (50 m) — the radio keeps the
+    // endgame alive instead of dumping the user back to SEEK in the doorway.
+    expect(selectMode(m({ prevMode: 'homing', distanceMetres: 30, uncertaintyMetres: 30, bleProximity: 'immediate' }))).toBe('homing')
+    expect(selectMode(m({ prevMode: 'homing', distanceMetres: 30, uncertaintyMetres: 30 }))).toBe('seek')
+  })
+
+  it('the hold respects the blend ceiling and the coarse rule', () => {
+    expect(selectMode(m({ prevMode: 'homing', distanceMetres: 60, bleProximity: 'immediate' }))).toBe('seek')
+    expect(selectMode(m({ prevMode: 'homing', distanceMetres: 45, uncertaintyMetres: 80, bleProximity: 'immediate' }))).toBe('seek')
+  })
+
+  it('a band is never a way IN to HOMING', () => {
+    expect(selectMode(m({ distanceMetres: 45, bleProximity: 'immediate' }))).toBe('seek')
+    expect(selectMode(m({ distanceMetres: 20, uncertaintyMetres: 80, bleProximity: 'immediate' }))).toBe('seek')
+  })
+})
+
+describe('voiceLine — ble-close', () => {
+  const fmt = (m: number): string => `${Math.round(m)} m`
+
+  it('claims radio proximity in radio words, never a number', () => {
+    const g = radarGuidance(input({ headingDeg: 30 }))
+    expect(voiceLine({ kind: 'ble-close' }, g, fmt)).toBe('Very close — by Bluetooth')
   })
 })
