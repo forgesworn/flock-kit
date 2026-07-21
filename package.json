@@ -91,6 +91,10 @@
     "./radar": {
       "types": "./dist/radar.d.ts",
       "import": "./dist/radar.js"
+    },
+    "./radarSession": {
+      "types": "./dist/radarSession.d.ts",
+      "import": "./dist/radarSession.js"
     }
   },
   "files": [
