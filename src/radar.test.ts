@@ -16,6 +16,9 @@ import {
   turnSign,
   classifyTrend,
   vectorDirectionPhrase,
+  clockHour,
+  clockFacePhrase,
+  speakableDistanceMetres,
   crossedMilestone,
   voiceLine,
   type RadarInput,
@@ -606,9 +609,9 @@ describe('voice-line copy', () => {
     expect(crossedMilestone(null, 900)).toBeNull()
   })
 
-  it('a milestone line reads "<distance>, <direction>"', () => {
-    const g = radarGuidance(input({ headingDeg: 30 })) // target to the left
-    expect(voiceLine({ kind: 'milestone', distanceMetres: 800 }, g, fmt)).toBe('800 m, ahead on your left')
+  it('a milestone line reads "<distance>, <clock direction>"', () => {
+    const g = radarGuidance(input({ headingDeg: 30 })) // target 30° to my left
+    expect(voiceLine({ kind: 'milestone', distanceMetres: 800 }, g, fmt)).toBe("800 m, at your 11 o'clock")
   })
 
   it('degradations and arrival speak plainly, never a bearing', () => {
@@ -616,5 +619,80 @@ describe('voice-line copy', () => {
     expect(voiceLine({ kind: 'arrived' }, g, fmt)).toMatch(/GPS reach/i)
     expect(voiceLine({ kind: 'degraded', state: 'stale' }, g, fmt)).toMatch(/stale/i)
     expect(voiceLine({ kind: 'compass-unreliable' }, g, fmt)).toMatch(/compass unreliable/i)
+  })
+})
+
+// ── v2.1: clock-face + periodic voice (field test 2026-07-21) ────────────────
+
+describe('clockHour / clockFacePhrase', () => {
+  it('maps the cardinal relative bearings to their clock hours', () => {
+    expect(clockHour(0)).toBe(12)
+    expect(clockHour(90)).toBe(3)
+    expect(clockHour(180)).toBe(6)
+    expect(clockHour(-180)).toBe(6)
+    expect(clockHour(-90)).toBe(9)
+  })
+
+  it('rounds to the nearest hour with 30° sectors centred on each hour', () => {
+    expect(clockHour(14)).toBe(12) // still inside the 12 o'clock sector
+    expect(clockHour(16)).toBe(1)
+    expect(clockHour(-16)).toBe(11)
+    expect(clockHour(44)).toBe(1)
+    expect(clockHour(46)).toBe(2)
+    expect(clockHour(359)).toBe(12)
+  })
+
+  it('yields null / empty with no bearing', () => {
+    expect(clockHour(null)).toBeNull()
+    expect(clockFacePhrase(null)).toBe('')
+  })
+
+  it('speaks the phrase the clips are baked from', () => {
+    expect(clockFacePhrase(90)).toBe("at your 3 o'clock")
+    expect(clockFacePhrase(0)).toBe("at your 12 o'clock")
+  })
+})
+
+describe('speakableDistanceMetres', () => {
+  it('rounds to the nearest ladder step', () => {
+    expect(speakableDistanceMetres(12)).toBe(10)
+    expect(speakableDistanceMetres(13)).toBe(15)
+    expect(speakableDistanceMetres(340)).toBe(300)
+    expect(speakableDistanceMetres(370)).toBe(400)
+    expect(speakableDistanceMetres(1240)).toBe(1000)
+    expect(speakableDistanceMetres(1260)).toBe(1500)
+  })
+
+  it('clamps below and beyond the ladder', () => {
+    expect(speakableDistanceMetres(1)).toBe(10)
+    expect(speakableDistanceMetres(50_000)).toBe(10_000)
+  })
+})
+
+describe('periodic voice line', () => {
+  const fmt = (m: number): string => `${Math.round(m)} m`
+
+  it('reads "<distance>, <clock direction>" while the bearing is honest', () => {
+    const g = radarGuidance(input({ headingDeg: 30 }))
+    expect(voiceLine({ kind: 'periodic', distanceMetres: 1000 }, g, fmt)).toBe("1000 m, at your 11 o'clock")
+  })
+
+  it('degrades to range-only when the bearing is not usable', () => {
+    // A coarse target: distance is honest, a pointing claim is not.
+    const g = radarGuidance(input({ target: target({ uncertaintyMetres: 300 }) }))
+    expect(g.bearingUsable).toBe(false)
+    expect(voiceLine({ kind: 'periodic', distanceMetres: 1000 }, g, fmt)).toBe('1000 m')
+  })
+
+  it('degrades to range-only with no heading', () => {
+    const g = radarGuidance(input({ headingDeg: null }))
+    expect(voiceLine({ kind: 'periodic', distanceMetres: 500 }, g, fmt)).toBe('500 m')
+  })
+
+  it('a target move speaks its own interrupt line', () => {
+    const g = radarGuidance(input({ headingDeg: 30 }))
+    expect(voiceLine({ kind: 'moved', distanceMetres: 300 }, g, fmt)).toBe("They've moved — 300 m, at your 11 o'clock")
+    const noHeading = radarGuidance(input({ headingDeg: null }))
+    expect(voiceLine({ kind: 'moved', distanceMetres: 300 }, noHeading, fmt)).toBe("They've moved — 300 m")
   })
 })

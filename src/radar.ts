@@ -106,6 +106,16 @@ export const RADAR = {
   voiceMilestonesMetres: [2000, 1000, 500, 250, 100],
   /** No two voice lines closer together than this (arrival excepted). */
   voiceMinIntervalSec: 10,
+
+  // ── v2.1 (field test 2026-07-21): periodic voice + course trust floor ──────
+  /** The minute-cadence status line: every this-many seconds the voice channel
+   *  re-states range and clock-face direction, in every mode — the by-ear
+   *  equivalent of glancing at the scope. */
+  periodicVoiceSec: 60,
+  /** A Doppler course over ground is only trusted at/above this ground speed —
+   *  below it the chip is repeating a stationary artefact, which froze the
+   *  pointer at the last walking direction when the phone was set down. */
+  courseMinSpeedMps: 1,
 } as const
 
 export type RadarOptions = typeof RADAR
@@ -719,8 +729,11 @@ export function crossedMilestone(
 }
 
 /**
- * A relative bearing → a spoken clock-free direction phrase (open-question #1:
- * left/right language, not clock-face). Positive = the target is to the right.
+ * A relative bearing → a spoken clock-free direction phrase. Positive = the
+ * target is to the right. Superseded for the voice channel by
+ * {@link clockFacePhrase} (open-question #1 was resolved by the 2026-07-21
+ * field test: clock-face reads faster than left/right prose); kept for any
+ * caller that wants prose.
  */
 export function vectorDirectionPhrase(relativeBearingDeg: number | null): string {
   if (relativeBearingDeg === null) return 'ahead'
@@ -734,6 +747,44 @@ export function vectorDirectionPhrase(relativeBearingDeg: number | null): string
   return `behind you on your ${side}`
 }
 
+/**
+ * The clock hour a relative bearing falls on: 30° sectors centred on each hour,
+ * dead ahead = 12, right = 3, behind = 6, left = 9. Null bearing → null.
+ */
+export function clockHour(relativeBearingDeg: number | null): number | null {
+  if (relativeBearingDeg === null || Number.isNaN(relativeBearingDeg)) return null
+  const sector = Math.round(norm360(relativeBearingDeg) / 30) % 12
+  return sector === 0 ? 12 : sector
+}
+
+/** A relative bearing → the spoken clock-face phrase ("at your 3 o'clock"),
+ *  or '' with no bearing (the caller drops to a range-only line). */
+export function clockFacePhrase(relativeBearingDeg: number | null): string {
+  const h = clockHour(relativeBearingDeg)
+  return h === null ? '' : `at your ${h} o'clock`
+}
+
+/**
+ * The enumerable spoken-range ladder, metres, ascending. The periodic voice
+ * line rounds to the NEAREST step so every line it can speak is pre-bakeable
+ * as an offline clip (GrapheneOS may have no TTS engine at all) — precision
+ * honesty is untouched because the scope still shows the exact range.
+ */
+export const SPEAKABLE_DISTANCES_METRES = [
+  10, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200, 250, 300, 400, 500, 750,
+  1000, 1500, 2000, 3000, 4000, 5000, 10_000,
+] as const
+
+/** Round a range to the nearest {@link SPEAKABLE_DISTANCES_METRES} step
+ *  (beyond the ladder: the top step). */
+export function speakableDistanceMetres(metres: number): number {
+  let best: number = SPEAKABLE_DISTANCES_METRES[0]
+  for (const step of SPEAKABLE_DISTANCES_METRES) {
+    if (Math.abs(step - metres) < Math.abs(best - metres)) best = step
+  }
+  return best
+}
+
 /** The events a voice line announces. Distances are pre-resolved by the caller
  *  so `voiceLine` stays formatter-agnostic (units follow the app's fmtDistance). */
 export type VoiceEvent =
@@ -743,19 +794,39 @@ export type VoiceEvent =
   | { kind: 'compass-unreliable' }
   | { kind: 'bearing-change' }
   | { kind: 'arrived' }
+  /** The minute-cadence status line (v2.1): rounded range + clock-face
+   *  direction, every mode. `distanceMetres` is pre-rounded by the caller
+   *  (speakableDistanceMetres) so the line is always clip-composable. */
+  | { kind: 'periodic'; distanceMetres: number }
+  /** A genuine target move just landed (v2.1) — the spoken twin of the moved
+   *  pulse, so a sparse-cadence target never reads as a frozen screen.
+   *  `distanceMetres` pre-rounded like `periodic`. */
+  | { kind: 'moved'; distanceMetres: number }
 
 /**
  * Assemble one spoken line. `fmtDistance` renders metres in the user's units
- * (the same helper the visuals use), so a milestone reads "800 metres, ahead on
- * your left". A voice line NEVER speaks a bearing the cue wouldn't beep — the
- * caller only raises direction-bearing events while the bearing is usable.
+ * (the same helper the visuals use), so a milestone reads "500 metres, at your
+ * 2 o'clock". A voice line NEVER speaks a bearing the cue wouldn't beep — the
+ * caller only raises direction-bearing events while the bearing is usable; the
+ * periodic line degrades itself to range-only when the bearing isn't honest.
  */
 export function voiceLine(ev: VoiceEvent, g: RadarGuidance, fmtDistance: (metres: number) => string): string {
+  const clock = (): string => (g.bearingUsable ? clockFacePhrase(g.relativeBearingDeg) : '')
+  const withClock = (dist: string): string => {
+    const c = clock()
+    return c ? `${dist}, ${c}` : dist
+  }
   switch (ev.kind) {
     case 'milestone':
-      return `${fmtDistance(ev.distanceMetres).replace('~', '')}, ${vectorDirectionPhrase(g.relativeBearingDeg)}`
-    case 'bearing-change':
-      return `Now ${vectorDirectionPhrase(g.relativeBearingDeg)}`
+      return withClock(fmtDistance(ev.distanceMetres).replace('~', ''))
+    case 'periodic':
+      return withClock(fmtDistance(ev.distanceMetres).replace('~', ''))
+    case 'moved':
+      return `They've moved — ${withClock(fmtDistance(ev.distanceMetres).replace('~', ''))}`
+    case 'bearing-change': {
+      const c = clockFacePhrase(g.relativeBearingDeg)
+      return c ? `Now ${c}` : ''
+    }
     case 'mode':
       return ev.mode === 'vector' ? 'Vehicle mode' : ev.mode === 'homing' ? 'Closing in' : 'On-foot tracking'
     case 'compass-unreliable':
