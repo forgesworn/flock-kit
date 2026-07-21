@@ -17,6 +17,7 @@ import {
   classifyTrend,
   vectorDirectionPhrase,
   clockHour,
+  stableClockHour,
   clockFacePhrase,
   speakableDistanceMetres,
   crossedMilestone,
@@ -846,5 +847,50 @@ describe('voiceLine — ble-close', () => {
   it('claims radio proximity in radio words, never a number', () => {
     const g = radarGuidance(input({ headingDeg: 30 }))
     expect(voiceLine({ kind: 'ble-close' }, g, fmt)).toBe('Very close — by Bluetooth')
+  })
+})
+
+// ── Direction callouts: boundary-sticky clock hour (field feedback 2026-07-21) ─
+
+describe('stableClockHour', () => {
+  it('adopts the raw hour on the first sample and holds it inside its sector', () => {
+    expect(stableClockHour(null, 0)).toBe(12)
+    expect(stableClockHour(12, 10)).toBe(12)
+    expect(stableClockHour(12, -10)).toBe(12)
+  })
+
+  it('a bearing loitering on the 15° sector line never chatters', () => {
+    // 15°+hysteresis is still 12; only past 21° does 1 o'clock take over.
+    expect(stableClockHour(12, 15)).toBe(12)
+    expect(stableClockHour(12, 15 + RADAR.clockHourHysteresisDeg)).toBe(12)
+    expect(stableClockHour(12, 15 + RADAR.clockHourHysteresisDeg + 1)).toBe(1)
+    // …and symmetrically towards 11.
+    expect(stableClockHour(12, -(15 + RADAR.clockHourHysteresisDeg))).toBe(12)
+    expect(stableClockHour(12, -(15 + RADAR.clockHourHysteresisDeg + 1))).toBe(11)
+  })
+
+  it('once flipped, the SAME band protects the new hour — true two-sided hysteresis', () => {
+    // At 22° the hour became 1 (centre 30°); dropping back to 14° is still
+    // within 1's grown sector (30±21 → 9..51), so 1 holds; 8° flips back.
+    expect(stableClockHour(1, 14)).toBe(1)
+    expect(stableClockHour(1, 8)).toBe(12)
+  })
+
+  it('a genuinely big swing flips immediately — hysteresis never hides a turn', () => {
+    expect(stableClockHour(12, 90)).toBe(3)
+    expect(stableClockHour(3, -90)).toBe(9)
+    expect(stableClockHour(12, 180)).toBe(6)
+  })
+
+  it('wraps cleanly around the 6 o\'clock rear boundary', () => {
+    // Hour 6 centres on 180°; ±(15+6)° of it stays 6 either side of the wrap.
+    expect(stableClockHour(6, 170)).toBe(6)
+    expect(stableClockHour(6, -170)).toBe(6)
+    expect(stableClockHour(6, -150)).toBe(7)
+  })
+
+  it('no bearing → no hour, and the next bearing re-adopts fresh', () => {
+    expect(stableClockHour(12, null)).toBe(null)
+    expect(stableClockHour(null, 45)).toBe(2)
   })
 })

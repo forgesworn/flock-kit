@@ -137,6 +137,18 @@ export const RADAR = {
    *  near likewise) — the cadence channel only, never the arrow or a number. */
   bleImmediateFloorMetres: 3,
   bleNearFloorMetres: 10,
+
+  // ── Direction callouts (field feedback 2026-07-21): a meaningful change of
+  // clock hour — 3 o'clock becoming 2 o'clock — is ALWAYS spoken, in every
+  // mode, while the bearing is honest. The compass must be followable by
+  // sound alone from vehicle range down to the exact spot. ──────────────────
+  /** A spoken/displayed clock hour only flips once the bearing is this far
+   *  past its sector boundary — otherwise a target sat on the 15° line
+   *  between two hours would chatter "2 o'clock… 3 o'clock…" forever. */
+  clockHourHysteresisDeg: 6,
+  /** Direction callouts get their own, faster floor than the general voice
+   *  rate limit — a turned corner must not wait 10 s to be corrected. */
+  voiceDirectionMinIntervalSec: 5,
 } as const
 
 export type RadarOptions = typeof RADAR
@@ -869,6 +881,36 @@ export function clockHour(relativeBearingDeg: number | null): number | null {
 export function clockFacePhrase(relativeBearingDeg: number | null): string {
   const h = clockHour(relativeBearingDeg)
   return h === null ? '' : `at your ${h} o'clock`
+}
+
+/**
+ * The clock hour with sector-boundary hysteresis — the one the UI displays and
+ * the voice speaks. The raw {@link clockHour} flips exactly on the 15° line
+ * between sectors, so a target sat on a boundary (or GPS jitter around it)
+ * would chatter between neighbouring hours. This keeps the PREVIOUS hour until
+ * the bearing is `clockHourHysteresisDeg` past its sector edge; a genuinely
+ * big swing (more than one sector) still flips immediately.
+ *
+ * The controller feeds the result back as `prevHour` each tick, and raises a
+ * `bearing-change` voice event whenever it changes — in EVERY mode, while the
+ * bearing is honest (field feedback 2026-07-21: a 3 o'clock that has become a
+ * 2 o'clock is always called out).
+ */
+export function stableClockHour(
+  prevHour: number | null,
+  relativeBearingDeg: number | null,
+  opts: RadarOptions = RADAR,
+): number | null {
+  const raw = clockHour(relativeBearingDeg)
+  if (raw === null) return null
+  if (prevHour === null) return raw
+  if (raw === prevHour) return prevHour
+  // Sticky band: hold the previous hour while the bearing is still within its
+  // sector grown by the hysteresis margin (sector half-width 15°).
+  const prevCentreDeg = (prevHour % 12) * 30
+  const offCentre = Math.abs(angularErrorDeg(norm360(relativeBearingDeg as number), prevCentreDeg))
+  if (offCentre <= 15 + opts.clockHourHysteresisDeg) return prevHour
+  return raw
 }
 
 /**

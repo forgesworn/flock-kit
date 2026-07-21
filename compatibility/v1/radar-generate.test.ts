@@ -27,6 +27,7 @@ import {
   bleProximityFromRssi,
   bleAssistUsable,
   bleCadenceFloorMetres,
+  stableClockHour,
   type RadarInput,
   type HeadingInput,
   type ModeInput,
@@ -182,6 +183,25 @@ const CUE_BLE_CASES: { input: RadarInput; ctx: CueContext }[] = [
   { input: { me: { lat: 0, lon: 0 }, headingDeg: 0, target: target(0.00027, 80) }, ctx: { mode: 'homing', bleProximity: 'immediate' } }, // coarse share unchanged
 ]
 
+// Direction callouts: boundary-sticky clock hour. Cases sit either side of the
+// 15°+hysteresis edges, plus the wrap at 6 and the null re-adoption path.
+const CLOCK_STABLE_CASES: { prevHour: number | null; rel: number | null }[] = [
+  { prevHour: null, rel: 0 },
+  { prevHour: null, rel: 45 },
+  { prevHour: 12, rel: 10 },
+  { prevHour: 12, rel: 20 },   // inside the sticky band → holds 12
+  { prevHour: 12, rel: 22 },   // past it → 1
+  { prevHour: 12, rel: -20 },  // symmetric hold
+  { prevHour: 12, rel: -22 },  // → 11
+  { prevHour: 1, rel: 14 },    // new hour protected by the same band
+  { prevHour: 1, rel: 8 },     // → back to 12
+  { prevHour: 12, rel: 90 },   // big swing flips immediately
+  { prevHour: 6, rel: 170 },   // rear-boundary wrap holds
+  { prevHour: 6, rel: -170 },  // …either side
+  { prevHour: 6, rel: -150 },  // → 7
+  { prevHour: 12, rel: null }, // no bearing → no hour
+]
+
 // Phase 3: the BLE hold in the mode machine.
 const MODE_BLE_CASES: ModeInput[] = [
   { prevMode: 'homing', distanceMetres: 45, speedMps: 0, fastForSec: 0, slowForSec: 0, uncertaintyMetres: 2.4, bleProximity: 'near' },      // held past GPS exit
@@ -228,6 +248,7 @@ function build(): Record<string, unknown> {
       return { input, ctx, guidance: g, cue: cueFor(g, ctx) }
     }),
     modeBle: MODE_BLE_CASES.map((input) => ({ input, expected: selectMode(input) })),
+    clockStable: CLOCK_STABLE_CASES.map((c) => ({ ...c, expected: stableClockHour(c.prevHour, c.rel) })),
   }
 }
 
