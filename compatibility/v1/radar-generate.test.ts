@@ -23,10 +23,15 @@ import {
   classifyTrend,
   vectorDirectionPhrase,
   crossedMilestone,
+  medianRssi,
+  bleProximityFromRssi,
+  bleAssistUsable,
+  bleCadenceFloorMetres,
   type RadarInput,
   type HeadingInput,
   type ModeInput,
   type CueContext,
+  type BleProximity,
 } from '../../src/radar'
 
 const OUT = resolve(dirname(fileURLToPath(import.meta.url)), 'radar-vectors.json')
@@ -146,6 +151,47 @@ const COURSE_CASES = [
   { prev: { position: { lat: 0, lon: 0 }, atSec: 10 }, next: { position: { lat: 0.001, lon: 0 }, atSec: 10 } },
 ]
 
+// Phase 3: BLE RSSI banding — window → band, away from the -60/-80 boundaries.
+const BLE_WINDOW_CASES: number[][] = [
+  [],                     // empty → null median, null band
+  [-55],                  // thin window → null band
+  [-55, -58],             // still thin
+  [-55, -58, -52],        // immediate
+  [-70, -75, -65],        // near
+  [-90, -85, -95],        // far
+  [-55, -56, -110],       // fade outlier — median holds immediate
+  [-62, -58, -64, -59],   // even window, mean-of-middle-two
+]
+
+// Phase 3: blend gates + cadence floors against real guidance shapes.
+const BLE_ASSIST_CASES: { input: RadarInput; ble: BleProximity }[] = [
+  { input: { me: { lat: 0, lon: 0 }, headingDeg: 0, target: target(0.00027) }, ble: 'immediate' }, // ~30 m precise → blends
+  { input: { me: { lat: 0, lon: 0 }, headingDeg: 0, target: target(0.00027) }, ble: 'far' },       // far band still "usable" (gates only)
+  { input: { me: { lat: 0, lon: 0 }, headingDeg: 0, target: target(0.00027) }, ble: null },        // no band
+  { input: { me: { lat: 0, lon: 0 }, headingDeg: 0, target: target(0.00027, 80) }, ble: 'immediate' }, // coarse share never blends
+  { input: { me: { lat: 0, lon: 0 }, headingDeg: 0, target: target(0.01) }, ble: 'immediate' },    // ~1.1 km — beyond the ceiling
+  { input: { me: null, headingDeg: 0, target: target(0.00027) }, ble: 'immediate' },               // no own fix → no distance → no blend
+]
+
+// Phase 3: the HOMING cadence blend — cue with a band vs without.
+const CUE_BLE_CASES: { input: RadarInput; ctx: CueContext }[] = [
+  { input: { me: { lat: 0, lon: 0 }, headingDeg: 20, target: target(0.00027) }, ctx: { mode: 'homing', bleProximity: 'immediate' } }, // ~30 m paced as 3 m
+  { input: { me: { lat: 0, lon: 0 }, headingDeg: 20, target: target(0.00027) }, ctx: { mode: 'homing', bleProximity: 'near' } },      // ~30 m paced as 10 m
+  { input: { me: { lat: 0, lon: 0 }, headingDeg: 20, target: target(0.00027) }, ctx: { mode: 'homing', bleProximity: 'far' } },       // far band paces nothing
+  { input: { me: { lat: 0, lon: 0 }, headingDeg: 0, target: target(0.00027), myAccuracyMetres: 15 }, ctx: { mode: 'homing', bleProximity: 'immediate' } }, // arrow stays dropped, cadence quickens
+  { input: { me: { lat: 0, lon: 0 }, headingDeg: 0, target: target(0.00027, 80) }, ctx: { mode: 'homing', bleProximity: 'immediate' } }, // coarse share unchanged
+]
+
+// Phase 3: the BLE hold in the mode machine.
+const MODE_BLE_CASES: ModeInput[] = [
+  { prevMode: 'homing', distanceMetres: 45, speedMps: 0, fastForSec: 0, slowForSec: 0, uncertaintyMetres: 2.4, bleProximity: 'near' },      // held past GPS exit
+  { prevMode: 'homing', distanceMetres: 45, speedMps: 0, fastForSec: 0, slowForSec: 0, uncertaintyMetres: 2.4, bleProximity: 'far' },       // far does not hold
+  { prevMode: 'homing', distanceMetres: 30, speedMps: 0, fastForSec: 0, slowForSec: 0, uncertaintyMetres: 30, bleProximity: 'immediate' },  // held through uncertainty collapse
+  { prevMode: 'homing', distanceMetres: 60, speedMps: 0, fastForSec: 0, slowForSec: 0, uncertaintyMetres: 2.4, bleProximity: 'immediate' }, // beyond the ceiling → exits
+  { prevMode: 'homing', distanceMetres: 45, speedMps: 0, fastForSec: 0, slowForSec: 0, uncertaintyMetres: 80, bleProximity: 'immediate' },  // coarse never held
+  { prevMode: 'seek', distanceMetres: 45, speedMps: 0, fastForSec: 0, slowForSec: 0, uncertaintyMetres: 2.4, bleProximity: 'immediate' },   // never a way IN
+]
+
 function build(): Record<string, unknown> {
   return {
     bearing: BEARING_CASES.map((c) => ({ ...c, expected: initialBearingDeg(c.a, c.b) })),
@@ -168,6 +214,20 @@ function build(): Record<string, unknown> {
     }),
     moved: MOVED_CASES.map((c) => ({ ...c, expected: targetMoved(c.prev, c.next) })),
     course: COURSE_CASES.map((c) => ({ ...c, expected: courseFromFixes(c.prev, c.next) })),
+    bleProximity: BLE_WINDOW_CASES.map((samples) => ({
+      samples,
+      median: medianRssi(samples),
+      expected: bleProximityFromRssi(samples),
+    })),
+    bleAssist: BLE_ASSIST_CASES.map(({ input, ble }) => {
+      const g = radarGuidance(input)
+      return { input, ble, usable: bleAssistUsable(g, ble), floorMetres: bleCadenceFloorMetres(ble) }
+    }),
+    cueBle: CUE_BLE_CASES.map(({ input, ctx }) => {
+      const g = radarGuidance(input)
+      return { input, ctx, guidance: g, cue: cueFor(g, ctx) }
+    }),
+    modeBle: MODE_BLE_CASES.map((input) => ({ input, expected: selectMode(input) })),
   }
 }
 
