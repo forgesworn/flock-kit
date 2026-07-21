@@ -798,6 +798,10 @@ export type VoiceEvent =
    *  direction, every mode. `distanceMetres` is pre-rounded by the caller
    *  (speakableDistanceMetres) so the line is always clip-composable. */
   | { kind: 'periodic'; distanceMetres: number }
+  /** A genuine target move just landed (v2.1) — the spoken twin of the moved
+   *  pulse, so a sparse-cadence target never reads as a frozen screen.
+   *  `distanceMetres` pre-rounded like `periodic`. */
+  | { kind: 'moved'; distanceMetres: number }
 
 /**
  * Assemble one spoken line. `fmtDistance` renders metres in the user's units
@@ -817,6 +821,8 @@ export function voiceLine(ev: VoiceEvent, g: RadarGuidance, fmtDistance: (metres
       return withClock(fmtDistance(ev.distanceMetres).replace('~', ''))
     case 'periodic':
       return withClock(fmtDistance(ev.distanceMetres).replace('~', ''))
+    case 'moved':
+      return `They've moved — ${withClock(fmtDistance(ev.distanceMetres).replace('~', ''))}`
     case 'bearing-change': {
       const c = clockFacePhrase(g.relativeBearingDeg)
       return c ? `Now ${c}` : ''

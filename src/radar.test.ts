@@ -688,4 +688,11 @@ describe('periodic voice line', () => {
     const g = radarGuidance(input({ headingDeg: null }))
     expect(voiceLine({ kind: 'periodic', distanceMetres: 500 }, g, fmt)).toBe('500 m')
   })
+
+  it('a target move speaks its own interrupt line', () => {
+    const g = radarGuidance(input({ headingDeg: 30 }))
+    expect(voiceLine({ kind: 'moved', distanceMetres: 300 }, g, fmt)).toBe("They've moved — 300 m, at your 11 o'clock")
+    const noHeading = radarGuidance(input({ headingDeg: null }))
+    expect(voiceLine({ kind: 'moved', distanceMetres: 300 }, noHeading, fmt)).toBe("They've moved — 300 m")
+  })
 })
