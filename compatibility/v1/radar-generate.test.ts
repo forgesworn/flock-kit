@@ -34,6 +34,17 @@ import {
   type CueContext,
   type BleProximity,
 } from '../../src/radar'
+import {
+  clampTtlSec,
+  requestOpen,
+  supersedes,
+  acceptSession,
+  sessionActive,
+  sessionRemainingSec,
+  sessionCadenceSec,
+  type SessionRequest,
+  type RadarSession,
+} from '../../src/radarSession'
 
 const OUT = resolve(dirname(fileURLToPath(import.meta.url)), 'radar-vectors.json')
 
@@ -212,6 +223,40 @@ const MODE_BLE_CASES: ModeInput[] = [
   { prevMode: 'seek', distanceMetres: 45, speedMps: 0, fastForSec: 0, slowForSec: 0, uncertaintyMetres: 2.4, bleProximity: 'immediate' },   // never a way IN
 ]
 
+// Radar session (consented cadence lift): the pure consent/clock rules the
+// native publisher must match. Cases sit either side of every window edge
+// (request TTL, skew, session TTL, the max-TTL cap). NaN clamp behaviour is
+// unit-tested per language instead (NaN does not survive JSON).
+const SESSION_REQ = { requestId: 'r1', ttlSec: 900, sentAtSec: 1000 } as SessionRequest
+const SESSION_TTL_CASES = [900, 999_999, 3600, 0, -5]
+const SESSION_OPEN_CASES = [900, 970, 1000, 1120, 1150, 1151]
+const SESSION_SUPERSEDE_CASES: { prev: SessionRequest | null; next: SessionRequest }[] = [
+  { prev: null, next: SESSION_REQ },
+  { prev: SESSION_REQ, next: { requestId: 'r2', ttlSec: 900, sentAtSec: 1050 } },
+  { prev: { requestId: 'r2', ttlSec: 900, sentAtSec: 1050 }, next: SESSION_REQ },
+  { prev: SESSION_REQ, next: { requestId: 'r2', ttlSec: 900, sentAtSec: 1000 } },
+]
+const SESSION_ACCEPT_CASES: { req: SessionRequest; nowSec: number }[] = [
+  { req: SESSION_REQ, nowSec: 1060 },
+  { req: { requestId: 'r1', ttlSec: 999_999, sentAtSec: 1000 }, nowSec: 1060 },
+  { req: SESSION_REQ, nowSec: 5000 },
+]
+const SESSION_LIVE = { sessionId: 'r1', ttlSec: 900, startAtSec: 1000 } as RadarSession
+const SESSION_ACTIVE_CASES: { s: RadarSession; nowSec: number }[] = [
+  { s: SESSION_LIVE, nowSec: 1000 },
+  { s: SESSION_LIVE, nowSec: 969 },
+  { s: SESSION_LIVE, nowSec: 1900 },
+  { s: SESSION_LIVE, nowSec: 1930 },
+  { s: SESSION_LIVE, nowSec: 1931 },
+  { s: { sessionId: 'r1', ttlSec: 999_999, startAtSec: 1000 }, nowSec: 4600 },
+  { s: { sessionId: 'r1', ttlSec: 999_999, startAtSec: 1000 }, nowSec: 4631 },
+]
+const SESSION_REMAINING_CASES: { s: RadarSession; nowSec: number }[] = [
+  { s: SESSION_LIVE, nowSec: 1000 },
+  { s: SESSION_LIVE, nowSec: 1899.5 },
+  { s: SESSION_LIVE, nowSec: 5000 },
+]
+
 function build(): Record<string, unknown> {
   return {
     bearing: BEARING_CASES.map((c) => ({ ...c, expected: initialBearingDeg(c.a, c.b) })),
@@ -249,6 +294,15 @@ function build(): Record<string, unknown> {
     }),
     modeBle: MODE_BLE_CASES.map((input) => ({ input, expected: selectMode(input) })),
     clockStable: CLOCK_STABLE_CASES.map((c) => ({ ...c, expected: stableClockHour(c.prevHour, c.rel) })),
+    session: {
+      ttl: SESSION_TTL_CASES.map((ttlSec) => ({ ttlSec, expected: clampTtlSec(ttlSec) })),
+      open: SESSION_OPEN_CASES.map((nowSec) => ({ req: SESSION_REQ, nowSec, expected: requestOpen(SESSION_REQ, nowSec) })),
+      supersede: SESSION_SUPERSEDE_CASES.map((c) => ({ ...c, expected: supersedes(c.prev, c.next) })),
+      accept: SESSION_ACCEPT_CASES.map((c) => ({ ...c, expected: acceptSession(c.req, c.nowSec) })),
+      active: SESSION_ACTIVE_CASES.map((c) => ({ ...c, expected: sessionActive(c.s, c.nowSec) })),
+      remaining: SESSION_REMAINING_CASES.map((c) => ({ ...c, expected: sessionRemainingSec(c.s, c.nowSec) })),
+      cadence: [true, false].map((moving) => ({ moving, expected: sessionCadenceSec(moving) })),
+    },
   }
 }
 

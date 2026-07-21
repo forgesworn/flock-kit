@@ -2264,5 +2264,276 @@
       "rel": null,
       "expected": null
     }
-  ]
+  ],
+  "session": {
+    "ttl": [
+      {
+        "ttlSec": 900,
+        "expected": 900
+      },
+      {
+        "ttlSec": 999999,
+        "expected": 3600
+      },
+      {
+        "ttlSec": 3600,
+        "expected": 3600
+      },
+      {
+        "ttlSec": 0,
+        "expected": 900
+      },
+      {
+        "ttlSec": -5,
+        "expected": 900
+      }
+    ],
+    "open": [
+      {
+        "req": {
+          "requestId": "r1",
+          "ttlSec": 900,
+          "sentAtSec": 1000
+        },
+        "nowSec": 900,
+        "expected": false
+      },
+      {
+        "req": {
+          "requestId": "r1",
+          "ttlSec": 900,
+          "sentAtSec": 1000
+        },
+        "nowSec": 970,
+        "expected": true
+      },
+      {
+        "req": {
+          "requestId": "r1",
+          "ttlSec": 900,
+          "sentAtSec": 1000
+        },
+        "nowSec": 1000,
+        "expected": true
+      },
+      {
+        "req": {
+          "requestId": "r1",
+          "ttlSec": 900,
+          "sentAtSec": 1000
+        },
+        "nowSec": 1120,
+        "expected": true
+      },
+      {
+        "req": {
+          "requestId": "r1",
+          "ttlSec": 900,
+          "sentAtSec": 1000
+        },
+        "nowSec": 1150,
+        "expected": true
+      },
+      {
+        "req": {
+          "requestId": "r1",
+          "ttlSec": 900,
+          "sentAtSec": 1000
+        },
+        "nowSec": 1151,
+        "expected": false
+      }
+    ],
+    "supersede": [
+      {
+        "prev": null,
+        "next": {
+          "requestId": "r1",
+          "ttlSec": 900,
+          "sentAtSec": 1000
+        },
+        "expected": true
+      },
+      {
+        "prev": {
+          "requestId": "r1",
+          "ttlSec": 900,
+          "sentAtSec": 1000
+        },
+        "next": {
+          "requestId": "r2",
+          "ttlSec": 900,
+          "sentAtSec": 1050
+        },
+        "expected": true
+      },
+      {
+        "prev": {
+          "requestId": "r2",
+          "ttlSec": 900,
+          "sentAtSec": 1050
+        },
+        "next": {
+          "requestId": "r1",
+          "ttlSec": 900,
+          "sentAtSec": 1000
+        },
+        "expected": false
+      },
+      {
+        "prev": {
+          "requestId": "r1",
+          "ttlSec": 900,
+          "sentAtSec": 1000
+        },
+        "next": {
+          "requestId": "r2",
+          "ttlSec": 900,
+          "sentAtSec": 1000
+        },
+        "expected": false
+      }
+    ],
+    "accept": [
+      {
+        "req": {
+          "requestId": "r1",
+          "ttlSec": 900,
+          "sentAtSec": 1000
+        },
+        "nowSec": 1060,
+        "expected": {
+          "sessionId": "r1",
+          "ttlSec": 900,
+          "startAtSec": 1060
+        }
+      },
+      {
+        "req": {
+          "requestId": "r1",
+          "ttlSec": 999999,
+          "sentAtSec": 1000
+        },
+        "nowSec": 1060,
+        "expected": {
+          "sessionId": "r1",
+          "ttlSec": 3600,
+          "startAtSec": 1060
+        }
+      },
+      {
+        "req": {
+          "requestId": "r1",
+          "ttlSec": 900,
+          "sentAtSec": 1000
+        },
+        "nowSec": 5000,
+        "expected": null
+      }
+    ],
+    "active": [
+      {
+        "s": {
+          "sessionId": "r1",
+          "ttlSec": 900,
+          "startAtSec": 1000
+        },
+        "nowSec": 1000,
+        "expected": true
+      },
+      {
+        "s": {
+          "sessionId": "r1",
+          "ttlSec": 900,
+          "startAtSec": 1000
+        },
+        "nowSec": 969,
+        "expected": false
+      },
+      {
+        "s": {
+          "sessionId": "r1",
+          "ttlSec": 900,
+          "startAtSec": 1000
+        },
+        "nowSec": 1900,
+        "expected": true
+      },
+      {
+        "s": {
+          "sessionId": "r1",
+          "ttlSec": 900,
+          "startAtSec": 1000
+        },
+        "nowSec": 1930,
+        "expected": true
+      },
+      {
+        "s": {
+          "sessionId": "r1",
+          "ttlSec": 900,
+          "startAtSec": 1000
+        },
+        "nowSec": 1931,
+        "expected": false
+      },
+      {
+        "s": {
+          "sessionId": "r1",
+          "ttlSec": 999999,
+          "startAtSec": 1000
+        },
+        "nowSec": 4600,
+        "expected": true
+      },
+      {
+        "s": {
+          "sessionId": "r1",
+          "ttlSec": 999999,
+          "startAtSec": 1000
+        },
+        "nowSec": 4631,
+        "expected": false
+      }
+    ],
+    "remaining": [
+      {
+        "s": {
+          "sessionId": "r1",
+          "ttlSec": 900,
+          "startAtSec": 1000
+        },
+        "nowSec": 1000,
+        "expected": 900
+      },
+      {
+        "s": {
+          "sessionId": "r1",
+          "ttlSec": 900,
+          "startAtSec": 1000
+        },
+        "nowSec": 1899.5,
+        "expected": 0
+      },
+      {
+        "s": {
+          "sessionId": "r1",
+          "ttlSec": 900,
+          "startAtSec": 1000
+        },
+        "nowSec": 5000,
+        "expected": 0
+      }
+    ],
+    "cadence": [
+      {
+        "moving": true,
+        "expected": 5
+      },
+      {
+        "moving": false,
+        "expected": 30
+      }
+    ]
+  }
 }
