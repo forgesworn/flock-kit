@@ -25,6 +25,7 @@ const FLOCK_MODULES = [
   'lost',
   'findping',
   'radar',
+  'radarSession',
 ] as const
 
 describe('package subpath exports', () => {
