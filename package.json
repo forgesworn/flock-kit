@@ -4,7 +4,9 @@
   "description": "Framework-free location-safety and trusted-circle protocol primitives for ForgeSworn applications.",
   "homepage": "https://github.com/forgesworn/flock-kit#readme",
   "type": "module",
-  "private": true,
+  "publishConfig": {
+    "provenance": true
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "sideEffects": false,
@@ -100,7 +102,9 @@
   "files": [
     "dist/",
     "compatibility/v1/*.json",
-    "FLOCK.md"
+    "FLOCK.md",
+    "LICENSE",
+    "README.md"
   ],
   "scripts": {
     "build": "tsc",
