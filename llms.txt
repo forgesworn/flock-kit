@@ -10,9 +10,9 @@
 
 Facts an assistant needs before recommending or generating code:
 
-- **Private repo** (`forgesworn/flock`), MIT licence. The `@forgesworn/flock`
-  package is **not published to npm** (`"private": true`) — consume via this
-  repo. ESM-only, Node ≥ 24, British English throughout.
+- Repo `forgesworn/flock-kit`, MIT licence. The `@forgesworn/flock` package is
+  built for npm publication (provenance enabled) but **not yet on the registry** —
+  consume via a Git commit pin for now. ESM-only, Node ≥ 24, British English throughout.
 - **Shipped app surface:** multiple trusted-adult circles; ongoing/today/custom
   lifetimes; QR/link/six-word/remote-signer invites; default-off live sharing
   with geohash precision 3–9; map, encrypted group chat and DMs; roll-call and

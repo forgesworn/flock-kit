@@ -1,8 +1,8 @@
 # @forgesworn/flock
 
 Framework-free protocol and policy primitives for location-aware safety and
-trusted circles. This is the canonical package shared by the Flock and
-Fledgling applications.
+trusted circles. This is the canonical package shared by the Flock application
+and other ForgeSworn clients.
 
 The package builds and evaluates protocol data. It does not own UI, storage,
 relay selection, environment configuration, geolocation, permissions, or app
