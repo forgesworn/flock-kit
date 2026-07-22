@@ -137,6 +137,11 @@ export const RADAR = {
    *  near likewise) — the cadence channel only, never the arrow or a number. */
   bleImmediateFloorMetres: 3,
   bleNearFloorMetres: 10,
+  /** Band hysteresis (dBm): the incumbent band is sticky by this margin, so a
+   *  fading link sitting on a boundary doesn't flap the cadence tick-to-tick.
+   *  Promotion needs the median clearly ABOVE a threshold (+margin), demotion
+   *  clearly BELOW (−margin) — like the clock-hour sticky band, for radio. */
+  bleBandHysteresisDb: 4,
 
   // ── Direction callouts (field feedback 2026-07-21): a meaningful change of
   // clock hour — 3 o'clock becoming 2 o'clock — is ALWAYS spoken, in every
@@ -462,16 +467,35 @@ export function medianRssi(samples: readonly number[]): number | null {
  * pseudo-science and no number is ever derived from radio. A window thinner
  * than `bleMinSamples` claims nothing (null): one lucky packet is not
  * proximity.
+ *
+ * `prevBand` (the last band this link reported) makes the boundaries STICKY:
+ * BLE fading can swing a stationary link's median a few dB across a threshold
+ * every window, and without hysteresis the cadence floor would flap. Promotion
+ * to a stronger band needs the median clearly above its threshold (+margin);
+ * demotion needs it clearly below (−margin); the incumbent holds through the
+ * band in between. A fresh window (`prevBand` null — first read, or after a
+ * dropout thinned the window) re-acquires at the raw thresholds.
  */
 export function bleProximityFromRssi(
   samples: readonly number[],
   opts: RadarOptions = RADAR,
+  prevBand: BleProximity = null,
 ): BleProximity {
   const clean = samples.filter((s) => typeof s === 'number' && !Number.isNaN(s))
   if (clean.length < opts.bleMinSamples) return null
   const median = medianRssi(clean) as number
-  if (median >= opts.bleImmediateRssi) return 'immediate'
-  if (median >= opts.bleNearRssi) return 'near'
+  if (prevBand === null) {
+    if (median >= opts.bleImmediateRssi) return 'immediate'
+    if (median >= opts.bleNearRssi) return 'near'
+    return 'far'
+  }
+  // Sticky boundaries: raise the bar to climb a band, lower it to fall — the
+  // incumbent band holds through the ±margin around each threshold.
+  const h = opts.bleBandHysteresisDb
+  const immediateThreshold = prevBand === 'immediate' ? opts.bleImmediateRssi - h : opts.bleImmediateRssi + h
+  const nearThreshold = prevBand === 'far' ? opts.bleNearRssi + h : opts.bleNearRssi - h
+  if (median >= immediateThreshold) return 'immediate'
+  if (median >= nearThreshold) return 'near'
   return 'far'
 }
 
