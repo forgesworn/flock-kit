@@ -728,6 +728,34 @@ describe('medianRssi / bleProximityFromRssi', () => {
   it('one wild fade outlier cannot flip the band — median, not mean', () => {
     expect(bleProximityFromRssi([-55, -56, -110])).toBe('immediate')
   })
+
+  it('a fresh window (null prev) reads the raw band at the thresholds', () => {
+    expect(bleProximityFromRssi([-60, -60, -60], RADAR, null)).toBe('immediate') // exactly -60
+    expect(bleProximityFromRssi([-80, -80, -80], RADAR, null)).toBe('near')      // exactly -80
+  })
+
+  it('the incumbent band is sticky: a link fading a few dB across a boundary does not flap', () => {
+    // Sitting at ~-62 (just weaker than the -60 immediate line): a fresh read is
+    // 'near', but an already-'immediate' link holds until it clearly drops (< -64).
+    expect(bleProximityFromRssi([-62, -62, -62], RADAR, null)).toBe('near')
+    expect(bleProximityFromRssi([-62, -62, -62], RADAR, 'immediate')).toBe('immediate')
+    // …and only demotes once past the −margin (−60 − 4 = −64).
+    expect(bleProximityFromRssi([-65, -65, -65], RADAR, 'immediate')).toBe('near')
+  })
+
+  it('promotion needs the median clearly ABOVE a threshold (+margin)', () => {
+    // At ~-58 (just stronger than -60): a 'near' link does NOT jump to immediate
+    // until it clearly exceeds −60 + 4 = −56.
+    expect(bleProximityFromRssi([-58, -58, -58], RADAR, 'near')).toBe('near')
+    expect(bleProximityFromRssi([-55, -55, -55], RADAR, 'near')).toBe('immediate')
+    // The near/far line behaves the same: a 'far' link climbs to near only above −76.
+    expect(bleProximityFromRssi([-78, -78, -78], RADAR, 'far')).toBe('far')
+    expect(bleProximityFromRssi([-75, -75, -75], RADAR, 'far')).toBe('near')
+  })
+
+  it('a dropout (thin window) clears the band, so it re-acquires raw next time', () => {
+    expect(bleProximityFromRssi([-58], RADAR, 'immediate')).toBe(null) // window too thin now
+  })
 })
 
 describe('bleAssistUsable — the blend honesty gates', () => {
