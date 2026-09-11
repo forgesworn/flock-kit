@@ -155,6 +155,6 @@
     "nsec-tree": "^1.5.1",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.57.1",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.11"
   }
 }
