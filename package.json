@@ -104,7 +104,8 @@
     "compatibility/v1/*.json",
     "FLOCK.md",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "llms.txt"
   ],
   "scripts": {
     "build": "tsc",
