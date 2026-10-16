@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Docs only: README gains a tested Quick start, install commands and the
+  `radarSession` and `coordination` modules; `llms.txt` gains signatures and
+  shapes for every builder and helper, the full `decideEmission` rules, and
+  states plainly who encrypts (builders, AES-256-GCM via `canary-kit`) and who
+  signs and gift-wraps (the caller). Flock app status moved under its own
+  heading in `llms.txt`.
+
 ## [0.2.0] - 2026-07-19
 
 Replaces free-text buzz reasons with a fixed, provider-defined coordination
