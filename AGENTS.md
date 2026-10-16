@@ -59,12 +59,18 @@ Instructions in this file apply to the entire repository.
   predicates), never to encode or decode a geohash.
 - Who encrypts: the `signals`, `checkin`, `trail`, `buzz` and other `build*Signal`
   builders derive keys and encrypt internally from `seedHex` (AES-256-GCM via
-  `canary-kit`: the beacon key for `beacon`/`breach`/`pickup`, the duress key for
-  `help` and `trail`, the group envelope key for the rest). `buildNightOutGroupEvent`
-  takes caller-encrypted `encryptedContent`. Signing and per-recipient NIP-59
-  gift-wrapping are always the caller's. The builders are the exception to the
-  purity rule above: encryption uses a random nonce, so output is never
-  byte-identical, and most default an omitted `timestamp` to the current time.
+  `canary-kit`: the beacon key for `beacon`/`breach`/`pickup` and the `cover`
+  decoy, the duress key for `help` and `trail`, the group envelope key for the
+  rest). `buildNightOutGroupEvent` takes caller-encrypted `encryptedContent`.
+  Signing and per-recipient NIP-59 gift-wrapping are always the caller's.
+- Who decrypts: every builder except `buildLocationSignal` and `buildHelpSignal`
+  has a matching flock `decrypt*(seedHex, content)` (`decryptTrail` uses the duress
+  key). Those two are read with canary-kit's `decryptBeacon(deriveBeaconKey(seedHex), content)`
+  and `decryptDuressAlert(deriveDuressKey(seedHex), content)`. Receivers drop `t=cover`
+  themselves; the package has no helper for it.
+- The builders are the exception to the purity rule above: encryption uses a
+  random nonce, so output is never byte-identical, and most default an omitted
+  `timestamp` to the current time.
 - Preserve golden-vector parity: `radar`/`radarSession` guidance is mirrored
   by a native Kotlin implementation and pinned by
   `compatibility/v1/radar-vectors.json`. Never change guidance behaviour

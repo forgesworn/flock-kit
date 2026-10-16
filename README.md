@@ -90,6 +90,16 @@ not the NIP-40 `expiration` that `FLOCK.md` §6 asks every wrap to carry. An app
 that wants bounded relay retention needs its own wrap step built from
 `createRumor`, `createSeal` and `createWrap`.
 
+Receivers unwrap each wrap (`unwrapEvent` from `nostr-tools/nip59`), read the inner
+event's `t` tag, then decrypt. Every builder except the two in `signals` has a flock
+`decrypt*(seedHex, content)` (for example `decryptBuzz`, `decryptCheckIn`,
+`decryptTrail`). `beacon`, `breach`, `pickup` and the `cover` decoy are read with
+canary-kit's `decryptBeacon(deriveBeaconKey(seedHex), content)`, and `help` with
+`decryptDuressAlert(deriveDuressKey(seedHex), content)`, both re-exported from the
+root. `cover` carries only filler: the package has no helper to drop it, so a
+receiver simply handles no `t=cover` and discards it. `llms.txt` has a worked
+receiver example.
+
 ## Public modules
 
 - `geofence`, `noreport`, `policy`, `signals`
