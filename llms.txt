@@ -5,30 +5,25 @@
 > sharing, each sender chooses region-to-exact precision. Safety-library modes
 > can also disclose on a local breach/pick-up/help trigger. A thin application
 > layer over `canary-kit` (which extends `spoken-token`): the library decides
-> policy and builds inner events; the app encodes geohashes, signs, encrypts,
-> gift-wraps per recipient, and publishes outer kind-1059 events.
+> policy and builds unsigned inner events. Most builders derive keys from the
+> group seed and encrypt the payload themselves; the consuming app encodes
+> geohashes, signs, gift-wraps per recipient, and publishes the outer kind-1059
+> events.
 
 Facts an assistant needs before recommending or generating code:
 
 - Repo `forgesworn/flock-kit`, MIT licence. The `@forgesworn/flock` package is
   built for npm publication (provenance enabled) but **not yet on the registry**;
-  consume via a Git commit pin for now. ESM-only, Node ≥ 24, British English throughout.
-- **Shipped app surface:** multiple trusted-adult circles; ongoing/today/custom
-  lifetimes; QR/link/six-word/remote-signer invites; default-off live sharing
-  with geohash precision 3–9; map, encrypted group chat and DMs; roll-call and
-  direct quick actions; temporary exact festival mode; lost/ring/consent-gated
-  exact find; foreground radar; backup/reseed/remove/disband; offline PMTiles;
-  Tor/onion routing; App Lock and decoy view; local or external signing.
-- **Android native:** background fix→policy→encrypt→gift-wrap→relay publish is
-  shipped in Kotlin and hardware-verified while locked/walking and in stationary
-  deep Doze on GrapheneOS. Opt-in **Stay reachable** keeps a persistent Nostr
-  relay path for app-closed inbound alerts. This is not UnifiedPush. The native
-  locked-phone radar guide is built/JVM-vector-tested but still needs its field
-  pass; the live GrapheneOS/Orbot beacon pass is also pending.
-- **Library-only/parked from the app UI:** geofence breach, SOS/duress,
-  dead-man's-switch check-ins, breadcrumb trail, no-report zones,
-  rendezvous/fair meeting point, off-grid, and spoken pickup verification.
-- **iOS:** foreground PWA only; there is no native iOS background path.
+  consume via a Git commit pin for now (`npm install github:forgesworn/flock-kit#<sha>`;
+  only `v0.1.0` is tagged, so pin a commit, not a tag). ESM-only, Node ≥ 24,
+  British English throughout.
+- **Who does what.** Encryption: `signals`, `checkin`, `trail`, `buzz` and every
+  other `build*Signal` builder derive their key from `seedHex` and encrypt
+  internally (AES-256-GCM via `canary-kit`; `beacon`/`breach`/`pickup` use the
+  beacon key, `help` and `trail` the duress key, everything else the group
+  envelope key). The one exception is `buildNightOutGroupEvent`, which takes
+  caller-encrypted `encryptedContent`. Signing, geohash encoding and NIP-59
+  gift-wrapping are always the caller's.
 - **Every signal is NIP-59 gift-wrapped**: this is unconditional, not a
   setting or a per-mode option.
 
@@ -54,9 +49,11 @@ re-exports all of them plus the full `canary-kit` + `canary-kit/nostr` surface.
   `isGroupCoordinationAction`, `isDirectCoordinationAction`); root import only,
   no dedicated subpath.
 - `policy`: the disclosure-on-event decision (`decideEmission`); precedence
-  `help > pickup > breach > night-out coarse > withhold`.
-- `signals`: `beacon`/`breach`/`pickup` + `help` duress → unsigned kind-20078
-  events; builders derive keys and encrypt internally from the group seed.
+  `help > pickup > breach > night-out coarse > withhold`, with `offGrid` and
+  `noReportZones` applied as described under the API reference below.
+- `signals`: `beacon`/`breach`/`pickup` (plus a `cover` decoy type) and `help`
+  duress → unsigned kind-20078 events; builders derive keys and encrypt
+  internally from the group seed.
 - `nightout`: ephemeral groups (NIP-40 expiry), presence (derived: a member is
   "gone home" when their beacons go stale, default 600 s), separation outliers.
 - `checkin`: dead-man's-switch: encrypted "I'm OK" heartbeats (any cadence),
@@ -64,8 +61,8 @@ re-exports all of them plus the full `canary-kit` + `canary-kit/nostr` surface.
   and "I've got this" acknowledgement + escalation (`buildAckSignal`,
   `classifyEscalation`) so a miss is handled by a person, not a single toast.
 - `trail`: pre-SOS breadcrumbs: on-device rolling buffer (`pushCrumb`),
-  disclosed only with a help/breach as a duress-keyed `trail` signal; no-report
-  zones excluded at record time.
+  disclosed only with a help/breach as a duress-keyed `trail` signal.
+  `pushCrumb` takes no zone input and does not consult no-report zones.
 - `noreport`: inverse fences that cap disclosure over sensitive addresses.
 - `buzz`: encrypted "look at your phone" ping. `allclear`: stand-down with a
   coerced flag. `fences`: circle-wide safe-place sync (latest-wins).
@@ -75,14 +72,43 @@ re-exports all of them plus the full `canary-kit` + `canary-kit/nostr` surface.
   face-to-face pick-up verification words + silent duress word.
 - `joined`: encrypted member-joined notice. `lost`: lost-device flag and
   ring request. `findping`: remote exact-ping request whose consent gates live
-  on the receiving device. `radar`: pure distance/bearing/freshness/uncertainty
-  guidance and cue rules shared with the native implementation.
+  on the receiving device.
+- `radar`: pure distance/bearing/freshness/uncertainty guidance and cue rules
+  shared with the native implementation. `radarSession`: the pure rules for a
+  consented, time-boxed beacon-cadence lift between two members. Both are
+  pinned by `compatibility/v1/radar-vectors.json`.
 
 ## API quick reference (exact signatures)
+
+All `build*Signal` builders are `async`, return `Promise<UnsignedEvent>` (canary-kit's
+`{ kind, content, tags, created_at }`), and throw `Error` on malformed input. Each
+group-envelope builder has a matching `decrypt*(seedHex: string, content: string)`.
+`timestamp` params are unix seconds and default to the current time when omitted.
+Pubkeys are 64-char lowercase hex.
+
+### Group and seed
+
+```ts
+// canary-kit, re-exported at the root
+createGroup(config: GroupConfig): GroupState
+// GroupConfig: { name: string, members: string[] /* hex pubkeys */, preset?, rotationInterval?,
+//   wordCount?, wordlist?, tolerance?, beaconInterval?, beaconPrecision?, creator? }
+// GroupState.seed is the 64-char lowercase hex string every builder calls `seedHex`.
+```
+
+`GroupState.seed` derives the beacon, duress and envelope keys, so the caller must keep it
+secret: never log it or publish it bare. It reaches other members only through the
+gift-wrapped invite/reseed channel (FLOCK.md §3.4). `buildGroupStateEvent` (kind 30078)
+also comes from `canary-kit`.
+
+### Geofence, policy, no-report
 
 ```ts
 // geofence
 isBreach(point: LatLng, fence: Geofence): boolean            // ONE fence
+isInside(point: LatLng, fence: Geofence): boolean
+classifyContainment(point: LatLng, accuracyMetres: number, fences: Geofence[]): 'inside'|'outside'|'uncertain'
+haversineMetres(a: LatLng, b: LatLng): number
 type Geofence = { kind: 'circle', centre: LatLng, radiusMetres: number }
               | { kind: 'polygon', vertices: LatLng[] }       // LatLng = { lat, lon }
 
@@ -93,63 +119,274 @@ decideEmission(ctx: EmissionContext, precisions?: Partial<EmissionPrecisions>): 
 //   geofences?: Geofence[], trigger?: 'none'|'pickup'|'help', accuracyMetres?: number,
 //   offGrid?: boolean, noReportZones?: NoReportZone[] }
 // EmissionPlan: { action: 'withhold'|'coarse'|'full', precision: number /* 0 when withholding */,
-//   reason: 'none'|'nightout'|'breach'|'pickup'|'help' }
+//   reason: EmissionReason }
+// EmissionReason = 'none'|'nightout'|'breach'|'pickup'|'help'
+// EmissionPrecisions defaults (DEFAULT_PRECISIONS): { coarse: 6, full: 9, help: 11 }; each must be an
+//   integer 1-11 or decideEmission throws
 
+// noreport
+type NoReportPolicy = 'withhold' | 'coarse'
+type NoReportZone = { area: Geofence, policy?: NoReportPolicy /* default 'withhold' */, label?: string }
+inNoReportZone(point: LatLng, zones: NoReportZone[], accuracyMetres?: number): boolean  // false only if confidently outside all
+noReportPolicyAt(point: LatLng, zones: NoReportZone[], accuracyMetres?: number): NoReportPolicy | null
+```
+
+`decideEmission` rules, in order (all pure, deterministic):
+
+1. `trigger: 'help'` gives `full` at `precisions.help` (reason `help`); `'pickup'` gives `full` at
+   `precisions.full` (reason `pickup`). These fire even when `offGrid` is true. With no
+   `position` they return `withhold` (precision 0) but keep the reason, so a location-less
+   alert can still be sent.
+2. Otherwise `offGrid: true` returns `withhold` / `none`: it suppresses all automatic emission.
+3. Otherwise no `position` returns `withhold` / `none`.
+4. `mode: 'family'`: `full` at `precisions.full` with reason `breach` only when
+   `classifyContainment(position, accuracyMetres ?? 0, geofences) === 'outside'` and there is at
+   least one fence. An `uncertain` fix (the accuracy disc straddles a fence edge) never breaches,
+   so a noisy fix cannot raise a false alarm. Anything else is `withhold`.
+5. `mode: 'nightout'`: always `coarse` at `precisions.coarse`, reason `nightout`.
+6. `noReportZones` apply last, to the result above (including help and pickup), and only when a
+   `position` exists. The cap applies unless the fix is confidently outside the zone, so a larger
+   `accuracyMetres` makes it more likely to apply (it fails safe, the opposite direction to
+   breach). The strictest matching zone policy wins: `withhold` (the default) returns `withhold`
+   / precision 0 and keeps the reason; `coarse` returns action `coarse` at
+   `min(precision, precisions.coarse)`. A plan that is already `withhold` is unchanged.
+7. `accuracyMetres` defaults to 0 (treat the fix as exact); wherever containment is evaluated
+   (family breach check, no-report zones) it must be finite and ≥ 0 or `Error` is thrown.
+
+### Location and duress signals
+
+```ts
 // signals: async; encryption + key derivation happen inside the builder
-buildLocationSignal(p: { groupId: string, seedHex: string, signalType: 'beacon'|'breach'|'pickup',
+buildLocationSignal(p: { groupId: string, seedHex: string, signalType: LocationSignalType,
   geohash: string, precision: number }): Promise<UnsignedEvent>
+// LocationSignalType = 'beacon'|'breach'|'pickup'|'cover'  (beacon key; 'cover' is a decoy that receivers drop)
 buildHelpSignal(p: { groupId: string, seedHex: string, member: string,
   location: { geohash: string, precision: number, locationSource: 'beacon'|'verifier' } | null,
-  scope?: 'group'|'persona'|'master', originGroupId?: string }): Promise<UnsignedEvent>
-signalTypeForReason(reason: EmissionReason): SignalType | null
+  scope?: 'group'|'persona'|'master', originGroupId?: string }): Promise<UnsignedEvent>  // duress key
+signalTypeForReason(reason: EmissionReason): SignalType | null   // SignalType = LocationSignalType | 'help'; null for 'none'
+```
 
+### Night-out
+
+```ts
 // nightout: presence is DERIVED from beacon staleness; there is no "mark gone home" setter
 nightOutExpiry(startedAt: number, durationSeconds: number): number
 buildNightOutGroupEvent(p: { groupId: string, members: string[], encryptedContent: string,
   startedAt: number, durationSeconds: number, rotationInterval?: number, tolerance?: number }): UnsignedEvent
+  // SYNC, kind 30078, NIP-40 expiration; encryptedContent is encrypted by the CALLER
 classifyPresence(beacons: MemberBeacon[], now: number, opts?: { staleAfterSeconds?: number }): PresenceEntry[]
 stillOut(entries: PresenceEntry[]): PresenceEntry[]
+geoOutliers(points: { member: string, position: LatLng }[], thresholdMetres: number): string[]  // median-centre outliers
+// MemberBeacon = { member: string, geohash: string, precision: number, timestamp: number }
+// PresenceEntry = { member, status: 'active'|'stale', lastSeen: number, ageSeconds: number, geohash: string }
+```
 
-// checkin
+### Check-in and escalation
+
+```ts
+// checkin (group envelope key)
 buildCheckInSignal(p: { groupId: string, seedHex: string, member: string,
   intervalSeconds: number, timestamp?: number,
   battery?: 'low'|'critical' }): Promise<UnsignedEvent>  // interval <= 0 stands down
-classifyCheckins(checkins: CheckIn[], now: number, opts?: { graceSeconds?: number }): CheckInState[]
+classifyCheckins(checkins: CheckIn[], now: number, opts?: { graceSeconds?: number }): CheckInState[]  // grace default 300
+missedCheckins(states: CheckInState[]): CheckInState[]
 selfCheckInStatus(mine: CheckIn | null, now: number, opts?: { remindBeforeSeconds?: number,
-  graceSeconds?: number }): 'none'|'ok'|'due-soon'|'overdue'|'missed'  // LOCAL only, never emits
+  graceSeconds?: number }): 'none'|'ok'|'due-soon'|'overdue'|'missed'  // LOCAL only, never emits; remind default 600
 buildAckSignal(p: { groupId: string, seedHex: string, member: string, target: string,
   timestamp?: number }): Promise<UnsignedEvent>  // "I've got this" for target's missed check-in
 classifyEscalation(states: CheckInState[], acks: CheckInAck[], now: number,
-  opts?: { stepSeconds?: number }): EscalationState[]  // unacknowledged first, levels 0-2
+  opts?: { stepSeconds?: number }): EscalationState[]  // unacknowledged first, levels 0-2; step default 600
+// CheckIn = { member: string, timestamp: number, intervalSeconds: number, battery?: 'low'|'critical' }
+// CheckInState = { member, status: 'ok'|'overdue'|'missed', lastCheckIn: number,
+//   dueAt: number /* Infinity if stood down */, missedAt: number /* dueAt + grace */, ageSeconds: number }
+// CheckInAck = { member: string /* acknowledger */, target: string, timestamp: number }
+// EscalationState = { member: string, status: 'unacknowledged'|'acknowledged', level: 0|1|2,
+//   missedAt: number, acknowledgedBy?: string, acknowledgedAt?: number }
+```
 
+### Trail
+
+```ts
 // trail: buffer is memory-only; disclosure only rides a help/breach
 pushCrumb(crumbs: Breadcrumb[], crumb: Breadcrumb, opts?: { maxCrumbs?: number,
   maxAgeSeconds?: number, minSpacingSeconds?: number }): Breadcrumb[]  // pure; skips too-soon/older crumbs
 buildTrailSignal(p: { groupId: string, seedHex: string, member: string,
   reason: 'help'|'breach', crumbs: Breadcrumb[], timestamp?: number }): Promise<UnsignedEvent>  // DURESS key
 // Breadcrumb = { geohash: string, precision: number, timestamp: number }
+// defaults: max 12 crumbs, 900 s max age, 60 s min spacing; 1-12 crumbs per signal
 ```
 
-Geohash encoding is the caller's job (`geohash-kit`'s `encode(lat, lon, precision)`);
-signing is the caller's job (e.g. `nostr-tools` `finalizeEvent`). Group creation
-(`createGroup`, `buildGroupStateEvent`) comes from `canary-kit`, re-exported at
-the root. See `examples/quickstart.ts` for the full pipeline.
+### Circle pings and lifecycle (group envelope key)
 
-**Gift-wrapping is mandatory before publish** (FLOCK.md §3.3): the library has
-no wrap helper; the PWA wraps every signal via `app/src/giftwrap.ts`
-(`giftWrap(signer, recipientPk, inner, routeTag?)` → signed kind-1059, NIP-40
-expiry baked in); an external consumer can use `nostr-tools`'s `nip59` module.
-Publishing an unwrapped signal violates the privacy model.
+```ts
+buildBuzzSignal(p: { groupId: string, seedHex: string, from: string, action: BuzzAction,
+  target?: string, timestamp?: number }): Promise<UnsignedEvent>
+// BuzzAction = 'check_in' | 'on_my_way' | 'ring_lost_phone'. ring_lost_phone REQUIRES a target;
+// the other two reject one. check_in carries ask: 'location' (an ask, never an auto-disclosure).
+// decryptBuzz -> Buzz = { from, action, reason: string /* fixed label */, target?, timestamp, ask?: 'location' }
+buildAllClearSignal(p: { groupId, seedHex, member: string, timestamp?, coerced?: boolean }): Promise<UnsignedEvent>
+  // AllClear = { member, timestamp, coerced? }; a coerced: true all-clear is meant to be ignored by
+  // receivers so the alarm stays live (the flag is inside the encryption)
+buildJoinedSignal(p: { groupId, seedHex, member: string, timestamp?, handle?: string }): Promise<UnsignedEvent>
+  // handle trimmed, at most MAX_HANDLE (40) chars
+buildDisbandSignal(p: { groupId, seedHex, by: string, reason?: string, timestamp? }): Promise<UnsignedEvent>
+buildLostSignal(p: { groupId, seedHex, member: string, by: string, lost: boolean,
+  timestamp?, message?: string }): Promise<UnsignedEvent>   // message trimmed to 200 chars; latest per member wins
+buildFindPingSignal(p: { groupId, seedHex, from: string, target: string, timestamp? }): Promise<UnsignedEvent>
+  // the ASK only (t=findreq); the answer is an ordinary beacon; consent gates live in the app
+// coordination vocabulary (root import only): COORDINATION_LABELS = { check_in: 'Check in',
+//   on_my_way: 'On my way', where_are_you: 'Where are you?', call_me: 'Call me', come_to_me: 'Come to me' }
+// GROUP_COORDINATION_ACTIONS = ['check_in','on_my_way']; DIRECT_COORDINATION_ACTIONS =
+//   ['come_to_me','where_are_you','call_me','on_my_way']
+```
+
+### Fences, rendezvous, meeting, off-grid
+
+```ts
+buildFencesSignal(p: { groupId: string, seedHex: string, set: FenceSet }): Promise<UnsignedEvent>
+isNewerFenceSet(incoming: { updatedAt: number, by: string },
+  current?: { fencesUpdatedAt?: number, fencesBy?: string }): boolean   // latest wins; tie-break smaller `by`
+// FenceSet = { fences: Geofence[] /* at most MAX_FENCES = 50 */, updatedAt: number, by: string }
+
+buildRendezvousSignal(p: { groupId, seedHex, rendezvous: Rendezvous }): Promise<UnsignedEvent>
+buildRendezvousStatusSignal(p: { groupId, seedHex, status: RendezvousStatus }): Promise<UnsignedEvent>
+etaSeconds(distanceMetres: number, mode: TravelMode): number   // straight-line; SPEED_KMH walk 5, cycle 15, drive 30, transit 20
+assessArrival(rendezvous: Rendezvous, member: string, position: LatLng, mode: TravelMode, now: number,
+  opts?: { arrivalRadiusMetres?: number }): RendezvousProgress   // arrival radius default 60 m
+// Rendezvous = { id, place: LatLng & { label?, address?, geohash? }, deadline: number,
+//   mode: 'be-back'|'meet-at', setBy: string, createdAt: number }
+// RendezvousStatus = { rendezvousId, member, status: 'enroute'|'arrived'|'at-risk', etaSeconds, timestamp }
+// RendezvousProgress = { member, status, distanceMetres, etaSeconds, leaveBy, slackSeconds }
+// TravelMode = 'walk'|'cycle'|'drive'|'transit'
+
+buildMeetingRequestSignal(p: { groupId, seedHex, request: MeetingRequest }): Promise<UnsignedEvent>
+buildMeetingShareSignal(p: { groupId, seedHex, share: MeetingShare }): Promise<UnsignedEvent>
+parseMeetingShare(o: unknown): MeetingShare | null    // non-throwing
+// MeetingRequest = { id, setBy, mode: TravelMode, maxTimeMinutes: number, createdAt }
+// MeetingShare = { requestId, member, geohash /* coarse, caller-encoded */, precision: 1-11, mode, timestamp }
+
+buildOffGridSignal(p: { groupId, seedHex, from: string, until: number, reason?: string,
+  timestamp? }): Promise<UnsignedEvent>   // reason at most 280 chars
+isOffGrid(o: OffGrid, nowSec: number): boolean   // OffGrid = { from, until, reason?, timestamp }; true while until > now
+```
+
+### Spoken pick-up verification (local, publishes nothing)
+
+```ts
+spokenCounter(nowSec: number): number            // SPOKEN_VERIFY = { wordCount: 1, tolerance: 1, rotationSeconds: 3600 }
+spokenWordsFor(seedHex: string, memberPubkey: string, counter: number,
+  memberPubkeys: readonly string[]): { verify: string, duress: string }
+checkSpokenWord(spoken: string, seedHex: string, memberPubkeys: readonly string[],
+  counter: number): { status: 'verified'|'stale'|'duress'|'failed', duressMembers: string[] }
+  // pass the FULL roster; on 'duress' show the same UI as 'verified' and raise help silently
+estimateSpokenVerificationRisk(memberPubkeys: readonly string[] | number): SpokenVerificationRisk
+```
+
+### Radar (pure guidance; mirrored by the native Kotlin port)
+
+```ts
+radarGuidance(input: RadarInput, opts?: RadarOptions): RadarGuidance
+// RadarInput = { me: LatLng|null, headingDeg: number|null,
+//   target: { position: LatLng, uncertaintyMetres: number, ageSeconds: number } | null,
+//   myAccuracyMetres?: number|null }
+// RadarGuidance.state: 'unavailable'|'no-fix'|'stale'|'coarse'|'arrived'|'no-heading'|'point'
+cueFor(g: RadarGuidance, ctx?: CueContext, opts?: RadarOptions): RadarCue   // beep/haptic pattern, never sensors or audio
+classifyFreshness(ageSeconds: number, opts?: RadarOptions): 'fresh'|'aging'|'stale'  // RADAR.freshSeconds 60, staleSeconds 600
+// RADAR holds every tuning constant. Also exported: initialBearingDeg, resolveHeading, selectMode,
+// smoothHeadingDeg, courseFromFixes, bleProximityFromRssi, voiceLine, clockFacePhrase and more (see src/radar.ts).
+
+// radarSession: a mutual, time-boxed cadence lift; models no decline and no end reason
+RADAR_SESSION = { requestTtlSec: 120, defaultTtlSec: 900, maxTtlSec: 3600,
+  cadenceMovingSec: 5, cadenceStationarySec: 30, clockSkewSec: 30 }
+clampTtlSec(ttlSec: number): number
+requestOpen(req: SessionRequest, nowSec: number): boolean
+supersedes(prev: SessionRequest | null, next: SessionRequest): boolean   // newest send time wins
+acceptSession(req: SessionRequest, nowSec: number): RadarSession | null  // null once the ask is no longer open
+sessionActive(s: RadarSession, nowSec: number): boolean
+sessionRemainingSec(s: RadarSession, nowSec: number): number
+sessionCadenceSec(moving: boolean): number
+// SessionRequest = { requestId: string, ttlSec: number, sentAtSec: number }
+// RadarSession = { sessionId: string, ttlSec: number, startAtSec: number }
+```
+
+Never change radar or radarSession behaviour without regenerating and reviewing
+`compatibility/v1/radar-vectors.json` (`npm run gen:vectors`).
+
+## From decision to published event
+
+Geohash encoding is the caller's job (`geohash-kit`'s `encode(lat, lon, precision)`);
+`geohash-kit` and `nostr-tools` are not re-exported from the root, so add them to your
+own dependencies. Group creation (`createGroup`, `buildGroupStateEvent`) comes from
+`canary-kit`, re-exported at the root. The full pipeline (also in README.md):
+
+```ts
+import { createGroup, decideEmission, signalTypeForReason, buildLocationSignal } from '@forgesworn/flock'
+import { encode } from 'geohash-kit'
+import { generateSecretKey, getPublicKey } from 'nostr-tools/pure'
+import { wrapEvent } from 'nostr-tools/nip59'
+
+const mySecretKey = generateSecretKey()
+const friendPubkey = getPublicKey(generateSecretKey())
+const group = createGroup({ name: 'Night out', members: [getPublicKey(mySecretKey), friendPubkey] })
+const seedHex = group.seed   // keep secret
+const groupId = 'night-out-1'
+
+const position = { lat: 51.5007, lon: -0.1246 }
+const plan = decideEmission({ mode: 'nightout', position })
+const signalType = signalTypeForReason(plan.reason)
+if (plan.action !== 'withhold' && signalType !== null && signalType !== 'help') {   // help: buildHelpSignal
+  const geohash = encode(position.lat, position.lon, plan.precision)
+  const inner = await buildLocationSignal({ groupId, seedHex, signalType, geohash, precision: plan.precision })
+  const wrap = wrapEvent(inner, mySecretKey, friendPubkey)   // per recipient; publish `wrap` (kind 1059), never `inner`
+}
+```
+
+**Gift-wrapping is mandatory before publish** (FLOCK.md §3.3): the library has no wrap
+helper, so use `nostr-tools`'s `nip59` module (`wrapEvent(event, senderSecretKey,
+recipientPubkey)`, once per recipient). NIP-59 keeps the inner
+event an unsigned rumour and the seal carries the sender's signature, so do not call
+`finalizeEvent` on the inner event first. `wrapEvent` tags the wrap with `p` only; it does
+not add the NIP-40 `expiration` that FLOCK.md §6 asks every wrap to carry, so an app that
+wants bounded relay retention builds its own wrap from `createRumor`, `createSeal` and
+`createWrap`. Publishing an unwrapped signal violates the privacy model.
 
 ## Documentation
 
-- [README.md](README.md): overview, module status, the make-or-break platform constraint
+- [README.md](README.md): overview, install, Quick start, module list
 - [FLOCK.md](FLOCK.md): protocol spec: event kinds, payload shapes, privacy invariants
 - [AGENTS.md](AGENTS.md): agent instructions (commands, structure, security-critical paths)
 
 ## Conventions
 
 British English. ESM-only, ES2022. TDD: failing test first. Library modules
-stay pure (return new state, no mutation). Geohash encoding + encryption stay
-at the edge. Commits: `type: description`, no Co-Authored-By lines.
-NIP-44 encryption (never NIP-04); NIP-40 `expiration` tag (never `expiry`).
+stay pure (return new state, no mutation). Geohash encoding and decoding stay
+at the edge: `geohash-kit` is a runtime dependency used only for geometry in
+`geofence` (`distanceFromCoords` behind `haversineMetres`, plus the polygon and
+bounds predicates behind accuracy-aware containment), never to encode or decode
+a geohash. Payload encryption happens inside the builders as described above;
+the caller adds NIP-44 at the Nostr edge (NIP-59 gift-wrap, the
+caller-encrypted `buildNightOutGroupEvent` content). Commits: `type: description`,
+no Co-Authored-By lines. NIP-44 encryption (never NIP-04); NIP-40 `expiration`
+tag (never `expiry`).
+
+## Flock application status (not this package's API)
+
+This describes the Flock app that consumes the package, not anything this package
+ships or owns. The package has no UI, relay selection or app lifecycle.
+
+- **Shipped app surface:** multiple trusted-adult circles; ongoing/today/custom
+  lifetimes; QR/link/six-word/remote-signer invites; default-off live sharing
+  with geohash precision 3–9; map, encrypted group chat and DMs; roll-call and
+  direct quick actions; temporary exact festival mode; lost/ring/consent-gated
+  exact find; foreground radar; backup/reseed/remove/disband; offline PMTiles;
+  Tor/onion routing; App Lock and decoy view; local or external signing.
+- **Android native:** background fix→policy→encrypt→gift-wrap→relay publish is
+  shipped in Kotlin and hardware-verified while locked/walking and in stationary
+  deep Doze on GrapheneOS. Opt-in **Stay reachable** keeps a persistent Nostr
+  relay path for app-closed inbound alerts. This is not UnifiedPush. The native
+  locked-phone radar guide is built/JVM-vector-tested but still needs its field
+  pass; the live GrapheneOS/Orbot beacon pass is also pending.
+- **Library-only/parked from the app UI:** geofence breach, SOS/duress,
+  dead-man's-switch check-ins, breadcrumb trail, no-report zones,
+  rendezvous/fair meeting point, off-grid, and spoken pickup verification.
+- **iOS:** foreground PWA only; there is no native iOS background path.

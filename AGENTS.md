@@ -8,9 +8,10 @@ Instructions in this file apply to the entire repository.
   geofencing, disclosure policy, duress/check-in/trail signals, night-out
   presence, and locked-phone radar guidance.
 - A thin application layer over `canary-kit` (which extends `spoken-token`):
-  this library decides policy and builds inner events; the consuming app
-  encodes geohashes, signs, encrypts, gift-wraps per recipient, and publishes
-  the outer kind-1059 events.
+  this library decides policy and builds unsigned inner events, and most
+  builders derive keys and encrypt internally from `seedHex`; the consuming app
+  encodes geohashes, signs, gift-wraps per recipient, and publishes the outer
+  kind-1059 events.
 - ESM-only package (`"type": "module"`).
 - Requires Node.js 24+.
 
@@ -52,8 +53,18 @@ Instructions in this file apply to the entire repository.
 - Use British English spelling in identifiers and prose: `licence`, `colour`, `centre`.
 - Library modules are pure and deterministic: no I/O, no `Date.now()`, no
   mutation. "Now" and positions are always caller-supplied inputs; geohash
-  encoding/decoding and encryption happen at the edge (the consuming app),
-  never inside these modules.
+  encoding/decoding happens at the edge (the consuming app), never inside
+  these modules. `geohash-kit` is a runtime dependency used only for geometry
+  in `geofence` (`distanceFromCoords`, `pointInPolygon` and the bounds
+  predicates), never to encode or decode a geohash.
+- Who encrypts: the `signals`, `checkin`, `trail`, `buzz` and other `build*Signal`
+  builders derive keys and encrypt internally from `seedHex` (AES-256-GCM via
+  `canary-kit`: the beacon key for `beacon`/`breach`/`pickup`, the duress key for
+  `help` and `trail`, the group envelope key for the rest). `buildNightOutGroupEvent`
+  takes caller-encrypted `encryptedContent`. Signing and per-recipient NIP-59
+  gift-wrapping are always the caller's. The builders are the exception to the
+  purity rule above: encryption uses a random nonce, so output is never
+  byte-identical, and most default an omitted `timestamp` to the current time.
 - Preserve golden-vector parity: `radar`/`radarSession` guidance is mirrored
   by a native Kotlin implementation and pinned by
   `compatibility/v1/radar-vectors.json`. Never change guidance behaviour
