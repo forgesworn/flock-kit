@@ -81,8 +81,15 @@ re-exports all of them plus the full `canary-kit` + `canary-kit/nostr` surface.
 ## API quick reference (exact signatures)
 
 All `build*Signal` builders are `async`, return `Promise<UnsignedEvent>` (canary-kit's
-`{ kind, content, tags, created_at }`), and throw `Error` on malformed input. Each
-group-envelope builder has a matching `decrypt*(seedHex: string, content: string)`.
+`{ kind, content, tags, created_at }`), and throw `Error` on malformed input. Every
+builder except the two in `signals` (`buildLocationSignal`, `buildHelpSignal`) has a
+matching flock `decrypt*(seedHex: string, content: string): Promise<T>` that derives
+its own key and re-validates the payload: `decryptCheckIn`, `decryptAck`,
+`decryptAllClear`, `decryptBuzz`, `decryptDisband`, `decryptFences`, `decryptFindPing`,
+`decryptJoined`, `decryptLost`, `decryptMeetingRequest`, `decryptMeetingShare`,
+`decryptOffGrid`, `decryptRendezvous`, `decryptRendezvousStatus` (all group envelope
+key) and `decryptTrail` (duress key). `buildLocationSignal` and `buildHelpSignal` have
+no flock decrypt: read them with canary-kit's, as shown under "Receiving signals".
 `timestamp` params are unix seconds and default to the current time when omitted.
 Pubkeys are 64-char lowercase hex.
 
@@ -164,6 +171,58 @@ buildHelpSignal(p: { groupId: string, seedHex: string, member: string,
   location: { geohash: string, precision: number, locationSource: 'beacon'|'verifier' } | null,
   scope?: 'group'|'persona'|'master', originGroupId?: string }): Promise<UnsignedEvent>  // duress key
 signalTypeForReason(reason: EmissionReason): SignalType | null   // SignalType = LocationSignalType | 'help'; null for 'none'
+```
+
+#### Receiving signals (beacon-key and duress-key types)
+
+The `signals` builders have no flock `decrypt*`; the matching readers are canary-kit's, re-exported
+at the root, and take a derived key rather than `seedHex`:
+`decryptBeacon(key: Uint8Array, content: string): Promise<BeaconPayload>` with
+`deriveBeaconKey(seedHex)` for `beacon`, `breach`, `pickup` and `cover`
+(`BeaconPayload = { geohash, precision, timestamp }`), and
+`decryptDuressAlert(key: Uint8Array, content: string): Promise<DuressAlert>` with
+`deriveDuressKey(seedHex)` for `help` (`DuressAlert = { type: 'duress', member, geohash, precision,
+locationSource: 'beacon'|'verifier'|'none', timestamp, scope, originGroupId? }`). `trail` is also
+duress-keyed but has its own reader, `decryptTrail(seedHex, content)`; do not use `decryptDuressAlert`
+on it. Both keys are distinct, so a wrong-key read throws (AES-GCM authentication fails).
+
+A receiver dispatches on the inner event's `t` tag after NIP-59 unwrapping. `cover` is a decoy that
+is wire-identical to a beacon and carries only caller-supplied filler: the package ships no
+cover-dropping helper, so the receiving app simply has no handler for `t=cover` and discards it
+before (or instead of) decrypting.
+
+```ts
+import { deriveBeaconKey, deriveDuressKey, decryptBeacon, decryptDuressAlert, decryptTrail } from '@forgesworn/flock'
+import { unwrapEvent } from 'nostr-tools/nip59'
+import type { NostrEvent } from 'nostr-tools/pure'
+
+// `wrap` is a received kind-1059 event, `mySecretKey` the recipient's key, `seedHex` the circle seed.
+async function receive(wrap: NostrEvent, mySecretKey: Uint8Array, seedHex: string): Promise<void> {
+  const inner = unwrapEvent(wrap, mySecretKey)   // the unsigned kind-20078 rumour
+  const type = inner.tags.find((tag) => tag[0] === 't')?.[1]
+  switch (type) {
+    case 'beacon':
+    case 'breach':
+    case 'pickup': {
+      const { geohash, precision, timestamp } = await decryptBeacon(deriveBeaconKey(seedHex), inner.content)
+      console.log(type, geohash, precision, timestamp)
+      break
+    }
+    case 'help': {
+      const alert = await decryptDuressAlert(deriveDuressKey(seedHex), inner.content)
+      console.log('help from', alert.member, alert.geohash)
+      break
+    }
+    case 'trail': {
+      const trail = await decryptTrail(seedHex, inner.content)
+      console.log('trail', trail.member, trail.crumbs.length)
+      break
+    }
+    case 'cover':
+    default:
+      break   // cover decoys (and any type this app does not handle) are dropped silently
+  }
+}
 ```
 
 ### Night-out
