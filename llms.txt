@@ -27,6 +27,12 @@ Facts an assistant needs before recommending or generating code:
 - **Every signal is NIP-59 gift-wrapped**: this is unconditional, not a
   setting or a per-mode option.
 
+## ForgeSworn ecosystem
+
+- [ForgeSworn library guide](https://forgesworn.dev/llms.txt): Find related libraries, tools and integration guides by task and runtime.
+- [ForgeSworn on GitHub](https://github.com/forgesworn): Browse the organisation’s public repositories.
+- [Project source](https://github.com/forgesworn/flock-kit): Canonical source repository, documentation and release information.
+
 ## Privacy invariants (never break these: FLOCK.md §6)
 
 1. Withholding location must be observationally identical to sharing.
