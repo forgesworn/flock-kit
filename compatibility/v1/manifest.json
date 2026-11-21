@@ -99,6 +99,11 @@
       "contract": "radar guidance state and cues"
     },
     {
+      "name": "circleLifecycle",
+      "test": "src/circleLifecycle.test.ts",
+      "contract": "circle identity, predecessor commitments and owner-authorised epoch transitions"
+    },
+    {
       "name": "radarSession",
       "test": "src/radarSession.test.ts",
       "contract": "consented time-boxed cadence-lift rules (no decline, no end reason, clamped TTLs)"

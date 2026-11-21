@@ -3,12 +3,12 @@
   "sourceRepository": "git@github.com:forgesworn/flock.git",
   "sourceCommit": "2b8c3a7512503b28c2fb1d25681a20e26728056d",
   "sourceGitTreeSha1": "b3be19dadb33449c5854891e60c5af4b7d36748d",
-  "sourceFileCount": 50,
-  "sourceSha256": "7b05503689436eb3c1fb231890b096fdf4f2d9bcdb5395f0644697e85ed60db1",
+  "sourceFileCount": 52,
+  "sourceSha256": "ff996836b884db3f1b02dd8486aae36a4288e2aca2520d6ee036a2486c11b4c1",
   "vectorFiles": [
     "manifest.json",
     "radar-vectors.json",
     "vectors.json"
   ],
-  "vectorSha256": "ea5da94f515b4f2e71369a5c70cdaf564a121255aef5a6eaae67f75bae0e8470"
+  "vectorSha256": "57d95f457516c49fb357ff277bf697450a619888e96a1ea128088ccb240d174f"
 }

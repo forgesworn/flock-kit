@@ -261,6 +261,24 @@ beacon domain (§6 invariant 3). Rules:
 - The trail is **best-effort**: a lost trail must never fail or delay the
   alert it accompanies.
 
+### Owner-authorised circle state (v2)
+
+The app assigns a stable identity by hashing the JSON array
+`["flock/circle/v2", owner, salt]` with SHA-256. The owner and 32-byte
+salt are carried inside encrypted application messages. An owner-authenticated
+personal-inbox packet carries the circle epoch, the preceding state commitment,
+the current seed, a roster and cumulative removals. The wrap's authenticated
+seal signer must match the recorded owner, and the recipient must be retained.
+Adjacent epochs must extend the held state commitment. A signed snapshot at a
+higher epoch can catch a device up across missed rotations. Removal requires
+a new seed. Conflicting statements at the same epoch pause sharing and require
+an explicit recovery. A terminal update carries a null seed.
+
+The library exposes `circleIdentity`, `circleStateCommitment`,
+`parseCircleState` and `decideCircleTransition`. The caller authenticates,
+encrypts, transports and persists the packet. The circle ID and roster stay
+inside the encryption.
+
 ## 4. Disclosure-on-event policy
 
 The privacy core (`src/policy.ts`, `decideEmission`). Location is plaintext only

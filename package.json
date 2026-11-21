@@ -94,6 +94,10 @@
       "types": "./dist/radar.d.ts",
       "import": "./dist/radar.js"
     },
+    "./circleLifecycle": {
+      "types": "./dist/circleLifecycle.d.ts",
+      "import": "./dist/circleLifecycle.js"
+    },
     "./radarSession": {
       "types": "./dist/radarSession.d.ts",
       "import": "./dist/radarSession.js"
