@@ -46,6 +46,17 @@ describe('authorised circle lifecycle', () => {
     expect(await decideCircleTransition(closed, rotation, owner, retained, 1001)).toBe('reject')
   })
 
+  it('lets the owner explicitly re-admit a member with a fresh seed', async () => {
+    const returned = {
+      ...rotation, epoch: 2, parent: await circleStateCommitment(rotation), seed: '4'.repeat(64),
+      removed: [], members: [...rotation.members, removed], readmitted: { [removed]: 2 }, at: 1002,
+    }
+    expect(await decideCircleTransition(rotation, returned, owner, retained, 1002)).toBe('accept')
+    expect(await decideCircleTransition(rotation, { ...returned, seed: rotation.seed }, owner, retained, 1002)).toBe('reject')
+    expect(await decideCircleTransition(rotation, { ...returned, readmitted: {} }, owner, retained, 1002)).toBe('reject')
+    expect(await decideCircleTransition(start, { ...returned, seed: start.seed }, owner, removed, 1002)).toBe('reject')
+  })
+
   it('rejects malformed or contradictory membership and expired circles', async () => {
     expect(parseCircleState({ ...rotation, members: [owner, owner] })).toBeNull()
     expect(parseCircleState({ ...rotation, members: [owner, removed] })).toBeNull()

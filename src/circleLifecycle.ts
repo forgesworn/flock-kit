@@ -14,6 +14,8 @@ export interface CircleStatePacket {
   seed: string | null
   members: string[]
   removed: string[]
+  /** The signed epoch of each explicit re-admission. */
+  readmitted?: Record<string, number>
   at: number
 }
 
@@ -34,7 +36,8 @@ export function circleIdentity(owner: string, salt: string): Promise<string> {
 
 export function circleStateCommitment(state: CircleStatePacket): Promise<string> {
   return commitment(['flock/circle-state/v2', state.id, state.epoch, state.parent, state.seed,
-    [...state.members].sort(), [...state.removed].sort(), state.name, state.expiresAt, state.at])
+    [...state.members].sort(), [...state.removed].sort(), state.name, state.expiresAt, state.at,
+    Object.entries(state.readmitted ?? {}).sort(([a], [b]) => a.localeCompare(b, 'en'))])
 }
 
 function roster(values: unknown): string[] | null {
@@ -52,10 +55,18 @@ export function parseCircleState(value: unknown): CircleStatePacket | null {
       (o.seed !== null && !isHex(o.seed))) return null
   const members = roster(o.members)
   const removed = roster(o.removed)
-  if (!members || !removed || !members.includes(o.owner) || members.some((pk) => removed.includes(pk))) return null
+  if (!members || !removed || members.length + removed.length > 512 || !members.includes(o.owner) || members.some((pk) => removed.includes(pk))) return null
+  let readmitted: Record<string, number> | undefined
+  if (o.readmitted !== undefined) {
+    if (!o.readmitted || typeof o.readmitted !== 'object' || Array.isArray(o.readmitted)) return null
+    const entries = Object.entries(o.readmitted)
+    if (entries.some(([pk, epoch]) => (!members.includes(pk) && !removed.includes(pk)) || !counter(epoch) || epoch === 0 || epoch > (o.epoch as number))) return null
+    readmitted = Object.fromEntries(entries)
+  }
   return {
     t: o.t, id: o.id, owner: o.owner, salt: o.salt, name: o.name, expiresAt: o.expiresAt,
     epoch: o.epoch, parent: o.parent as string | null, seed: o.seed, members, removed, at: o.at,
+    ...(readmitted && Object.keys(readmitted).length ? { readmitted } : {}),
   }
 }
 
@@ -76,9 +87,11 @@ export async function decideCircleTransition(
   if (next.epoch === held.epoch) {
     return await circleStateCommitment(next) === await circleStateCommitment(held) ? 'duplicate' : 'conflict'
   }
-  if (held.removed.some((pk) => !next.removed.includes(pk)) ||
+  const reinstated = (pk: string): boolean => (next.readmitted?.[pk] ?? 0) > held.epoch
+  if (held.removed.some((pk) => !next.removed.includes(pk) && (!next.members.includes(pk) || !reinstated(pk))) ||
       held.members.some((pk) => !next.members.includes(pk) && !next.removed.includes(pk))) return 'reject'
-  if (next.removed.length > held.removed.length && next.seed === held.seed) return 'reject'
+  if (Object.entries(held.readmitted ?? {}).some(([pk, epoch]) => (next.readmitted?.[pk] ?? 0) < epoch)) return 'reject'
+  if (next.seed === held.seed && (next.removed.some((pk) => !held.removed.includes(pk)) || Object.keys(next.readmitted ?? {}).some(reinstated))) return 'reject'
   if (next.epoch === held.epoch + 1 && next.parent !== await circleStateCommitment(held)) return 'reject'
   return 'accept'
 }

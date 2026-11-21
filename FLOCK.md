@@ -267,11 +267,12 @@ The app assigns a stable identity by hashing the JSON array
 `["flock/circle/v2", owner, salt]` with SHA-256. The owner and 32-byte
 salt are carried inside encrypted application messages. An owner-authenticated
 personal-inbox packet carries the circle epoch, the preceding state commitment,
-the current seed, a roster and cumulative removals. The wrap's authenticated
+the current seed, a roster, removals and recorded re-admission epochs. The wrap's authenticated
 seal signer must match the recorded owner, and the recipient must be retained.
 Adjacent epochs must extend the held state commitment. A signed snapshot at a
 higher epoch can catch a device up across missed rotations. Removal requires
-a new seed. Conflicting statements at the same epoch pause sharing and require
+a new seed. An explicit invitation to an evicted key records a re-admission
+and rotates to a fresh seed. Conflicting statements at the same epoch pause sharing and require
 an explicit recovery. A terminal update carries a null seed.
 
 The library exposes `circleIdentity`, `circleStateCommitment`,
